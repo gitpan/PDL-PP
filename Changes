@@ -1,3 +1,26 @@
+0.005 => 0.006
+
+Huge number of changes:
+
+- object orientification of code
+
+- threading, implicit and explicit
+
+- Thread.pm, mapping utility functions
+
+- now we require PDL 1.02
+
+- PDLs cannot for the moment be created (sorry about the
+  step backwards)
+
+- some more documentation
+
+- demo.pl
+
+0.004 => 0.005
+
+Make it possible to create PDLs on the fly
+
 0.003 => 0.004
 
 Added $P(...) and $TSD(...) syntax for the fortran interface

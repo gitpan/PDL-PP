@@ -13,20 +13,51 @@ PDL::PP->import(qw/PDL::Experiment PDL::Experiment Experiment/);
 
 defpdl(
 	'PDLTEST1',
-	[qw/a(x,y,X) [o]b(y,x,X)/],
+	[qw/a(x,y) [o]b(y,x)/],
 	'int c',
 	'loop(x) %{
 	 	loop(y) %{
-			$b() = $a();
+			$b() = $a() + c;
 		%}
 	%}'
 );
 
+defpdl(
+	'assgn',
+	'a(); b(); TYPES:D',
+	'',
+	'$b() = $a();'
+);
+
+defpdl(
+	'sumover',
+	'a(n); b(); TYPES:D',
+	'',
+	'double tmp = 0;
+	 loop(n) %{ tmp += $a(); %}
+	 $b() = tmp;'
+);
+
+defpdl(
+	'inner',
+	'a(n); b(n); c(); TYPES:D', '',
+	'double tmp = 0;
+	 loop(n) %{ tmp += $a() * $b(); %}
+	 $c() = tmp;'
+);
+
+defpdl(
+	'outer',
+	'a(n); b(m); c(n,m); TYPES:D', '',
+	'loop(n,m) %{ $c() = $a() * $b(); %}'
+);
+
+
 # Matrix multiplication.  See how naturally this comes out!!!
 # At the same time, test whether the type-conditionals work.
 defpdl(
-	'PDLTEST2',
-	[qw/a(xa,xy,X) b(xy,yb,X) [o]c(xa,yb,X)/],
+	'matmult',
+	[qw/a(xa,xy) b(xy,yb) [o]c(xa,yb)/],
 	'',
 	'
 	 printf("MMTYPE: "$TBSULFD("B","S","U","L","F","D")"\n");

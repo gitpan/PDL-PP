@@ -7,6 +7,11 @@
 PDL::PP is a module that programmers can use to generate XSUB
 code that interfaces with PDL easily.
 
-Requirements: PDL1.00, perl5.003_01
+Requirements: PDL1.02, perl5.003(_01?)
+
+See the file demo.pl for some comments on what
+this can be used for.
+
+See the file TODO for current problems.
 
 	Tuomas J. Lukka (lukka@fas.harvard.edu)

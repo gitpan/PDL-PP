@@ -12,7 +12,7 @@ use PDL::Core::Dev;            # Pick up development utilities
 WriteMakefile(
  'NAME'  	=> 'PDL::PP',
 # 'VERSION_FROM'	=> 'PP.pm',
- VERSION	=> '0.005',
+ VERSION	=> '0.006',
  'TYPEMAPS'     => [PDL_TYPEMAP], 
  'OBJECT'       => '',
  'INC'          => PDL_INCLUDE,

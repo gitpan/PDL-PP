@@ -11,13 +11,15 @@ PDL::PP - Generate PDL routines from concise descriptions
 	addpm('sub foo {}');
 
 	defpdl(
-		'Transpose',
-		'a(x,y,X); int [o]b(y,x,X); TYPES:BSULFD;',
-		'int c',
-		'loop(x,y) %{
-			$b() = $a();
+		'inner_product',
+		'a(x); b(x); c(); TYPES:BSULFD;',
+		'int d',
+		'double tmp = 0;
+		 loop(x) %{
+		 	tmp += $a() * $b();
 			$TFD(do_when_float, do_when_double);
-		%}'
+		%}
+		 $c() = tmp;'
 	);
 
 	done();
@@ -25,7 +27,7 @@ PDL::PP - Generate PDL routines from concise descriptions
 =head1 DESCRIPTION
 
 This module defines the routine C<defpdl> that generates xsub code from 
-a short description such as the transpose function above. C<done> 
+a short description such as the inner_product function above. C<done()> 
 automatically writes the files C<Prefix.xs> and C<Prefix.pm>.
 
 The idea is that since this concise description encodes in itself
@@ -41,7 +43,7 @@ Of course, a human can also code all the intelligent code, but if
 there are tens of different routines, it gets very dull after a while.
 And to think about reuse: in the above code, the line
 
-	b() = a();
+	tmp += $a() * $b();
 
 is interpreted by the routine. At some hypothetical future
 time, if PDL starts supporting sparse matrices, this might still be
@@ -51,12 +53,66 @@ the compiler could, for debugging, place bounds checking at each
 access to a and b (because they are stored in memory sequentially,
 this would be far superior to the usual gcc bounds checking).
 
+=head2 Indexing
+
+PDL::PP makes it possible for the caller to use a powerful indexing system.
+Each index has an associated increment in the flat data space so 
+it becomes trivial to exchange two indices or so on.
+
+=head2 Threading
+
+A single call to a PDL::PP-defined xsub can be a loop over several dimensions.
+For example, if a function expects a 2D argument and is called with 
+a pdl with dimensions (5,4,3) the call is automatically translated into
+
+	func($a(:,:,0)); func($a(:,:,1)); func($a(:,:,2)); 
+
+except that it is faster. This is called implicit threading.
+
+If, in the previous example, you had wanted to thread over the second dimension
+instead of the last (which is the default for implicit threading), you
+need to do either
+
+	func($a->xchg(1,2));
+
+Which exchanges dimensions 1 and 2, resulting in (5,3,4) or
+
+	func($a->thread(1));
+
+Which means that we want to thread over dimension 1 (the second dimension,
+of width 4).
+
+For functions of several variables, this gets slightly more involved.
+Implicit threading takes the extra dimensions on all the variables and
+tuples them up so that the first extra dimension on each variable is one
+index to be threaded over (so all the first extra dimensions must be of
+the same size) and so on for the second extra dimension and so on.
+
+An extra dimension of size 1 is interpreted to have the same size as
+any other dimension but with increment 0 (all values of the index
+point to the same data).
+
+For example, if func now expects to have data as
+
+	f(a(x,y),b(x,y,z),c(x));
+
+then we can call (now, the numbers in parentheses are dimension sizes):
+
+	f(a(5,3,10,11),b(5,3,2,10,1,12),c(5,1,11,12));
+
+The meaning of which should be clear from the numbers.
+
+Explicit threading, in the case of several variables is different:
+here it is demanded that each C<thread> have the same number of arguments,
+the first arguments on each call corresponding to each other, similarly
+for the second etc. 
+
 =head2 PDL variables
 
 The second argument to C<defpdl> is either a ref to an
 array of strings of the form
 
-	typeoption [options]name(indices,X)
+	typeoption [options]name(indices)
 
 or a concatenation of strings like this with semicolons between them.
 Options is a comma-separated list which can at the moment contain
@@ -67,7 +123,16 @@ Options is a comma-separated list which can at the moment contain
 
 This pdl is used only for output and is therefore liable to be necessary
 to create at runtime. In this case, all of its indices need to have
-a defined value.
+a defined value. If threading is done when this pdl is created,
+then this it will have all the 
+threadindices threaded over in it.
+
+=item t
+
+This pdl is used only as a temporary and is therefore liable to be necessary
+to create at runtime. In this case, all of its indices need to have
+a defined value. On creation, no threadindices will be included to 
+a temp.
 
 =item int
 
@@ -79,18 +144,21 @@ as everything else.
 The name is a lowercase alphanumeric name for the variable. One of 
 the names can be preceded by ">" which means that is the function is 
 called like C<$a = f($b)> instead of C<f($a,$b)> then this argument
-is the output.
-The indices part is a comma-separated list of lowercase index names or 
-"..." or an uppercase index name for a "rest" index.
+is the output (THIS IS NOT YET IMPLEMENTED).
+The indices part is a comma-separated list of lowercase index names.
+If necessary, the indices can have predetermined sizes with the
+syntax
+
+	a(x,y=2);
 
 One of the strings in the second argument can be of the type
 
 	TYPES:whichtypes
 
-where whichtypes consists of a combination of the letters C<bsulfd>
+where whichtypes consists of a combination of the letters C<BSULFD>
 meaning for which datatypes this function should be build for. The default
 is all but if you are interfacing to a function library, for instance,
-the function may only be defined for some data type.
+the function may only be defined for some data types.
 
 =head2 Indices
 
@@ -98,12 +166,6 @@ C<defpdl> uses named indices. In the first example, there were two named
 indices, C<x> and C<y> and a "rest" index, C<X>. Each index name
 is unique so the C<x> in both the definitions of C<a> and C<b> are interpreted
 to mean the same number of elements and a runtime check is made of this.
-
-The "rest" index is a special case which may contain several indices,
-and must be currently in the same order. The idea is that the code will
-be automatically looped over this set of indices. In the future, it may
-be possible to have several different "rest" indices for different
-sets of variables.
 
 =head2 Loops
 
@@ -182,9 +244,6 @@ largest N_DIM (16, for example, or if you want to be *ABSOLUTELY* certain,
 50) and be done with it. Then it will be on the stack, and allocated 
 and accessed rapidly.
 
-At the moment, the code does not create nonexistent or invalid-sized
-pdls. However, the change is fairly trivial.
-
 The run-time error messages the code generates are really awful and
 uninformative.
 
@@ -200,8 +259,7 @@ times. The outer loops should update pointers to the data
 accessed inside to be efficient. However, the comfort of writing code
 like this is very nice.
 
-The current type coercion is not good. Especially the fortran
-hack should be generalized in some way.
+The documentation is written by the author :(
 
 =head1 AUTHOR
 
@@ -211,6 +269,311 @@ Copyright (C) 1996 Tuomas J. Lukka (lukka@fas.harvard.edu)
 
 sub print {print @_;}
 
+#####################################################################
+#
+# Encapsulate the accesses to a PDL.
+#
+package PDL::PP::Obj;
+use Carp;
+
+sub new {
+	my ($type,$string,$parent) = @_;
+	my $this = bless {},$type;
+	$string =~
+		/^
+		 \s*(int|)\s*	# $1: first option
+		 (?:
+			\[([^]]?)\]   	# $2: The initial [option] part
+	         )?\s*
+		 ([a-z0-9]+)          	# $3: The name
+		 \(([^)]*)\)  		# $4: The indices
+		/x or confess "Invalid pdl def $_\n";
+	print "PDL: '$1', '$2', '$3', '$4'\n";
+	my($opt1,$opt2,$name,$inds) = ($1,$2,$3,$4);
+	$this->{Name} = $name;
+	$this->{Flags} = [(split ',',$opt2),($opt1?$opt1:())];
+	for(@{$this->{Flags}}) {
+		/^o$/ and $this->{FlagOut}=1 and $this->{FlagCreat}=1 or
+		/^t$/ and $this->{FlagTemp}=1 and $this->{FlagCreat}=1 or
+		/^int$/ and $this->{FlagInt} = 1 or
+		croak("Invalid flag $_ given for $string\n");
+	}
+	my @inds = map{
+		s/\s//g; 		# Remove spaces
+		$_;
+	} split ',', $inds;
+	$this->{IndObjs} = [map {$parent->get_indobj_make($_)} @inds];
+	my $ind=0;
+	$this->{Inds} = [map {$_->add_pdl($this,$ind++);$_->{Name}} 
+		@{$this->{IndObjs}}];
+	my %indcount = ();
+	$this->{IndCounts} = [
+		map {
+			0+($indcount{$_}++);
+		} @inds
+	];
+	$this->{IndTotCounts} = [
+		map {
+			($indcount{$_});
+		} @inds
+	];
+	return $this;
+}
+
+# Print an access part.
+sub do_access {
+	my($this,$inds,$context) = @_;
+	my $pdl = $this->{Name};
+# Parse substitutions into hash
+	my %subst = map 
+	 {/^\s*(\w+)\s*=>\s*(\w*)\s*$/ or confess "Invalid subst $_\n"; ($1,$2)} 
+	 	split ',',$inds;
+# Generate the text
+	my $text = "(${pdl}_datap + $this->{Name}_threadoffs)"."[";
+	$text .= join '+','0',map {
+		$this->do_indterm($pdl,$_,\%subst,$context);
+	} (0..$#{$this->{Inds}});
+	$text .= "]";
+# If not all substitutions made, the user probably made a spelling
+# error. Barf.
+	if(scalar(keys %subst) != 0) {
+		confess("Substitutions left: ".(join ',',keys %subst)."\n");
+	}
+	return "$text /* ACCESS($access) */";
+}
+
+sub do_indterm { my($this,$pdl,$ind,$subst,$context) = @_;
+#	print Data::Dumper::Dumper($this);
+#	print "IND: $ind\n";
+# Get informed
+	my $indname = $this->{Inds}[$ind];
+	my $indno = $this->{IndCounts}[$ind];
+	my $indtot = $this->{IndTotCounts}[$ind];
+# See if substitutions
+	my $substname = ($indtot>1 ? $indname.$indno : $indname);
+	my $incname = $indname.($indtot>1 ? $indno : "");
+	my $index;
+	if(defined $subst->{$substname}) {$index = delete $subst->{$substname};}
+	else {
+# No => get the one from the nearest context.
+		for(@$context) {
+			if($_->[0] eq $indname) {$index = $_->[1]; break;}
+		}
+	}
+	if(!defined $index) {confess "Index not found: $pdl, $ind, $indname\n";}
+	return "__inc_$pdl"."_".$incname."*". $index;
+}
+
+sub do_pointeraccess {my($this) = @_;
+	return "($this->{Name}_datap + $this->{Name}_threadoffs)";
+}
+
+sub get_indname { my($this,$ind) = @_;
+	$this->{Inds}[$ind] . ($this->{IndTotCounts}[$ind]>1 ?
+				$this->{IndCounts}[$ind] : "");
+}
+
+sub get_xsinddecls { my($this) = @_;
+	"long $this->{Name}_threadoffs;
+	 long *__implthreadincs_$this->{Name};\n".
+	join '', map {
+		"long __inc_$this->{Name}_".$this->get_indname($_).";\n";
+	} (0..$#{$this->{Inds}});
+}
+
+#  Implicit threads use the variables
+#   __nimplthreaddims
+#   __implthreaddims
+#   __implthreadincs_pdl
+#
+#
+
+# Orig. __nimplthreaddims = 0
+sub get_xsimplthread1 { my($this) = @_;
+	my $ndims = $#{$this->{Inds}}+1;
+	return "if(__nimplthreaddims < $this->{Name}.ndims - $ndims)
+		   __nimplthreaddims = $this->{Name}.ndims - $ndims;";
+}
+
+# Then, __implthreaddims has been allocated, fill up the values with the
+# assertions. Originally each implthreaddim is 1.
+# Cases: implthreaddim == 1 -> place this, whatever this is
+#	 implthreaddim != 1 -> if not equal, barf
+
+sub get_xsimplthread2 { my($this) = @_;
+  my $pdl = $this->{Name}; my $ninds = $#{$this->{Inds}}+1;
+  return "
+    if(__nimplthreaddims) {
+  	__implthreadincs_$pdl = PDL->malloc(sizeof(int) * __nimplthreaddims);
+	for(__ind = 0; __ind < __nimplthreaddims; __ind++) {
+		(__implthreadincs_${pdl})[__ind] = 0;
+	}
+	for(__ind = $ninds; __ind < $pdl.ndims; __ind ++) {
+		(__implthreadincs_$pdl)[__ind - $ninds] = $pdl.incs[__ind];
+		if($pdl.dims[__ind] == 1) { continue; }
+		if(__implthreaddims[__ind - $ninds] < $pdl.dims[__ind]) {
+			if(__implthreaddims[__ind - $ninds] != 1) {
+				croak(\"Invalid dimension %d given for $pdl: incompatible with threading 1\\n\",__ind);
+			}
+			__implthreaddims[__ind - $ninds] = $pdl.dims[__ind];
+		} else if(__implthreaddims[__ind - $ninds] != $pdl.dims[__ind]) {
+			croak(\"Invalid dimension %d given for $pdl: incompatible with threading 2\\n\",__ind);
+		}
+	}
+    }";
+}
+
+# Check the dimensions.
+# I'll try to explain the semantics at some point.
+sub get_xsnormdimchecks { my($this) = @_;
+	my $pdl = $this->{Name};
+# Sanity check to avoid strange pointer accesses
+	"__flag = 0;
+	 for(__ind = 0; __ind < $pdl.ndims; __ind++) 
+	 	__flag += ($pdl.dims[__ind]-1) * $pdl.incs[__ind];
+	 for(__ind = 0; __ind < $pdl.nthreaddims; __ind++) 
+	 	__flag += ($pdl.threaddims[__ind]-1) * $pdl.threadincs[__ind];
+	 if(__flag >= $pdl.nvals || __flag < 0) {
+	 	croak(\"HELP!HELP!HELP! Invalid input dims for $pdl given!\\n\");
+	 }
+	".
+	"if($this->{Name}.ndims < $#{$this->{Inds}}+1) {
+		croak(\"Too few dimensions for $this->{Name}\\n\");
+	 }" .
+	("for(__ind=0;__ind < $this->{Name}.ndims; __ind++) 
+		if($this->{Name}.dims[__ind] == 1) {
+			$this->{Name}.incs[__ind] = 0;
+		}\n"
+	).
+	(join '', map {
+		"if($this->{Inds}[$_]_size == -1) {
+			    $this->{Inds}[$_]_size = $this->{Name}.dims[$_];
+			} else if($this->{Inds}[$_]_size != $this->{Name}.dims[$_]) {
+			   if($this->{Inds}[$_]_size == 1) {
+			      $this->{Inds}[$_]_size = $this->{Name}.dims[$_];
+			   } else if($this->{Name}.dims[$_] == 1) {
+			      /* Do nothing */
+			   } else {
+				croak(\"Wrong dimension $this->{Inds}[$_] for $this->{Name}\\n\");
+			    }
+			}
+		__inc_$this->{Name}_".$this->get_indname($_)." =
+			$this->{Name}.incs[$_];\n";
+	} (0..$#{$this->{Inds}}));
+}
+
+sub get_xsthreaddimchecks { my($this) =@_;
+	my $pdl = $this->{Name};
+	"if($pdl.nthreaddims != __nthreaddims) {
+		if($pdl.nthreaddims == 0) {
+			/* Do nothing. Must test for this in threadloop!!! */
+		} else if(__nthreaddims == -1) {
+			__nthreaddims = $pdl.nthreaddims;
+			__threaddims = $pdl.threaddims;
+			__threadinds = PDL->malloc(sizeof(int) * __nthreaddims);
+		} else {
+			croak(\"Unequal number of threaded dims for $pdl\\n\");
+		}
+	 }
+	 for(__ind = 0; __ind < __nthreaddims; __ind++) {
+	 	if($pdl.threaddims[__ind] != __threaddims[__ind]) {
+			croak(\"Unequal thread dimension %d for $pdl\\n\",__ind);
+		}
+	 }";
+}
+
+sub get_xsthreadoffs { my($this) = @_;
+	my $pdl = $this->{Name};my $ninds = $#{$this->{Inds}}+1;
+	"
+	 ${pdl}_threadoffs= 0;
+	 if($pdl.nthreaddims != 0) {
+	 	for(__ind=0; __ind < __nthreaddims; __ind++) {
+			${pdl}_threadoffs += __threadinds[__ind] *
+				${pdl}.threadincs[__ind];
+		}
+	 }
+	 if(__nimplthreaddims) {
+	 	for(__ind = $ninds; __ind < $pdl.ndims; __ind ++) {
+			${pdl}_threadoffs += __implthreadinds[__ind-$ninds] *
+				(__implthreadincs_$pdl)[__ind-$ninds];
+		}
+	 }
+	"
+};
+	
+sub get_xsdatapdecl { my($this,$genlooptype) = @_;
+	my $type; my $pdl = $this->{Name};
+	if(!grep {/^int$/} @{$this->{Flags}}) {
+		$type = $genlooptype;
+	} else {
+		$type = "long";
+	}
+	return "\t$type *${pdl}_datap = ($type *)${_}.data + ${_}.offs;\n";
+}
+
+sub get_xsdatatypetest { my($this) = @_;
+	if(!grep {/^int$/} @{$this->{Flags}}) {
+		return ("\tif($this->{Name}.datatype > __datatype)
+			__datatype = $this->{Name}.datatype;\n");
+	} else {
+		print "Not doing $this->{Name}: has int type\n";
+		return(qq%\tif($this->{Name}.datatype != PDL_L) croak("Invalid datatype for $this->{Name}: should be long\n");%);
+	}
+
+}
+
+sub get_xscoerce { my($this) = @_;
+	if(!grep {/^int$/} @{$this->{Flags}}) {
+		return("\tPDL->converttype(&($this->{Name}),__datatype,1);\n");
+	}
+}
+
+#####################################################################
+#
+# Encapsulate one index.
+
+package PDL::PP::Ind;
+use Carp;
+
+sub new {
+	my($type,$name) = @_;
+	my $this = bless {Name => $name},$type;
+	return $this;
+}
+
+sub add_pdl {
+	my($this,$pdlobj,$nth) = @_;
+	push @{$this->{Pdls}}, [$pdlobj,$nth];
+}
+
+sub add_value {
+	my($this,$val) = @_;
+	if(defined $this->{Value}) {
+		if($val != $this->{Value}) {
+			confess("For index $this->{Name} conflicting values $this->{Value} and $val given\n");
+		}
+	} else {
+		$this->{Value} = $val;
+	}
+}
+
+# This index will take its size value from outside parameter ...
+sub set_outsidepar { my($this,$outpar) = @_;
+	$this->{OutsidePar} = $outpar;
+}
+
+sub get_xsdecls { my($this) = @_;
+	if(!$this->{OutsidePar}) {
+		my $val = (defined($this->{Value})?$this->{Value}:-1);
+		return "long $this->{Name}_size = $val;\n";
+	} elsif(defined($this->{Value})) {
+		return "if($this->{Name}_size != $this->{Value})
+			croak(\"Value given to $this->{Name}_size not equal to $this->{Value}\\n\");"
+	}
+	return "";
+}
+
+#####################################################################
 package PDL::PP;
 use PDL::Core;
 use FileHandle;
@@ -357,61 +720,36 @@ sub parse_pdls { my($this) = @_;
 			if(/^\s*TYPES:/ ) {$typ=$_; ();} else {$_}
 		} (@{$this->{PDLS}});
 	if($typ) {
-		$typ =~ /^\s*TYPES:([BSULFD]+)\s*$/ or croak("Invalid types: $typ\n");
+		$typ =~ /^\s*TYPES:([BSULFD]+)\s*$/ or confess("Invalid types: $typ\n");
 		$this->{Types} = $1;
 	}
 # And get the info out of each one.
 	for (@{$this->{PDLS}}) {
-		/^
-		 \s*(int|)\s*	# $1: first option
-		 (?:
-			\[([^]]?)\]   	# $2: The initial [option] part
-	         )?\s*
-		 ([a-z0-9]+)          	# $3: The name
-		 \(([^)]+)\)  		# $4: The indices
-		/x or croak "Invalid pdl def $_\n";
-		print "PDL: '$1', '$2', '$3', '$4'\n";
-		my($opt1,$opt2,$name,$inds) = ($1,$2,$3,$4);
-		push @{$this->{PdlNames}}, $name;
-		$this->{PdlFlags}{$name} = [(split ',',$opt2),($opt1?$opt1:())];
-		my @inds = map{
-			s/\s//g; 		# Remove spaces
-			s/^\.\.\.$/_DOTS_/;     # ... => _DOTS_
-			$_;
-		} split ',', $inds;
-		$this->{PdlInds}{$name} = [@inds];
-		my %indcount = ();
-		$this->{PdlIndCounts}{$name} = [
-			map {
-				0+($indcount{$_}++);
-			} @inds
-		];
-		$this->{PdlIndTotCounts}{$name} = [
-			map {
-				($indcount{$_});
-			} @inds
-		];
-		my $ind=0;
-		for(@inds) {
-			push @{$this->{IndPdls}{$_}},[$name,$ind];
-		}
+		my $obj = new PDL::PP::Obj($_,$this);
+		$this->{Pdls}{$obj->{Name}} = $obj;
+		push @{$this->{PdlOrder}}, $obj->{Name};
+		push @{$this->{PdlNames}}, $obj->{Name};
+#		my $ind=0;
+#		for(@{$this->) {
+#			push @{$this->{IndPdls}{$_}},[$name,$ind++];
+#		}
 	}
-	@{$this->{PdlOrder}} = (
-	(map {
-		(grep {/^o$/} @{$this->{PdlFlags}{$_}})   ?
-		 () : $_
-	} @{$this->{PdlNames}}),
-	(map {
-		(!(grep {/^o$/} @{$this->{PdlFlags}{$_}}))   ?
-		 () : $_
-	} @{$this->{PdlNames}}));
-	$this->{IndNames} = [keys %{$this->{IndPdls}}];
+#	@{$this->{PdlOrder}} = (
+#	(map {
+#		(grep {/^o$/} @{$this->{PdlFlags}{$_}})   ?
+#		 () : $_
+#	} @{$this->{PdlNames}}),
+#	(map {
+#		(!(grep {/^o$/} @{$this->{PdlFlags}{$_}}))   ?
+#		 () : $_
+#	} @{$this->{PdlNames}}));
+#	$this->{IndNames} = [keys %{$this->{IndPdls}}];
 }
 
 # Parse the other parameter arguments
 sub parse_pars { my($this) = @_;
 	for (split ',',$this->{PARS}) {
-		/^\s*(.+)\b(\w+)\s*$/ or croak "Invalid pdl parameter $_\n";
+		/^\s*(.+)\b(\w+)\s*$/ or confess "Invalid pdl parameter $_\n";
 		$this->{Pars}{$2} = $1;
 	}
 }
@@ -419,15 +757,36 @@ sub parse_pars { my($this) = @_;
 # Find which dimensions have a corresponding parameter
 # and organize the dimensions in the order to seek them (non-output first,
 # then alphabetical (anything goes)
-sub parse_dims { my($this) = @_;
-	for (keys %{$this->{IndPdls}}) {
-#		my @lst = $this->{IndPdls}{$_};
-#		$this->{IndCheck}{$_} = [];
-		if(defined $this->{Pars}{$_."_size"}) {
-			$this->{IndCheck}{$_}=$_."_size";
+
+sub get_indobj_make {
+	my($this,$expr) = @_;
+	$expr =~ /^([a-z0-9]+)(?:=([0-9]+))?$/ or confess "Invalid index expr '$expr'\n";
+	my $name = $1; my $val = $2;
+	my $indobj;
+	if(defined $this->{Inds}{$name}) {
+		$indobj = $this->{Inds}{$name};
+	} else {
+		$indobj = new PDL::PP::Ind($expr);
+		$this->{Inds}{$name}=$indobj;
+		if(defined $this->{Pars}{$name."_size"}) {
+			$this->{Inds}{$name}->set_outsidepar($name."_size");
 		}
-		/[A-Z]/ and (
-			$this->{RestInds}{$_} = 1);
+	}
+	if(defined $val) { $indobj->add_value($val); }
+	return $indobj;
+}
+
+sub parse_dims { my($this) = @_;
+	for(values %{$this->{Pdls}}) {
+		for (@{$_->{Inds}}) {
+			$this->{Inds}{$_} = 1;
+		}
+	}
+	for(keys %{$this->{Inds}}) {
+		$this->{Inds}{$_} = new PDL::PP::Ind($_);
+		if(defined $this->{Pars}{$_."_size"}) {
+			$this->{Inds}{$_}->set_outsidepar($_."_size");
+		}
 	}
 }
 
@@ -442,7 +801,7 @@ sub parse_code { my($this) = @_;
 	my $control;
 	while($_) {
 		s/^(.*?)(\$[a-zA-Z]+\([^)]*\)|\bloop\([^)]+\)\s*%{|%}|$)//s or
-			croak("Invalid program $_");
+			confess("Invalid program $_");
 		$control = $2;
 #		if(!($1 =~ /^\s*$/)) {
 #			print "1: $1\n";
@@ -458,7 +817,7 @@ sub parse_code { my($this) = @_;
 			} elsif($control =~ /^%}/) {
 				pop @stack;
 			} else {
-				croak("Invalid control: $control\n");
+				confess("Invalid control: $control\n");
 			}
 		} else {
 			print("No \$2!\n");
@@ -491,9 +850,9 @@ sub do_loop { my($this,$loop,$context) = @_;
 	for(@{$loop->[0]}) {
 # Determine, which index this is. Chop one numeric character while not found.
 		my $ind = $_;
-		while(!grep {$_ eq $ind} @{$this->{IndNames}}) {
+		while(!$this->{Inds}{$ind}) {
 			if(!((chop $ind) =~ /[0-9]/)) {
-				croak("Index not found for $_ ($ind)!\n");
+				confess("Index not found for $_ ($ind)!\n");
 			}
 		}
 		$text .= "{long $_; for($_=0; $_<${ind}_size; $_++)";
@@ -505,43 +864,14 @@ sub do_loop { my($this,$loop,$context) = @_;
 		. "}$endtext";
 }
 
-sub do_indterm { my($this,$pdl,$ind,$subst,$context) = @_;
-	if($this->{PdlInds}{$pdl}[$_] =~ /[A-Z]/) {
-		return $pdl."_".$this->{PdlInds}{$pdl}[$_]."_offs";
-	}
-# Get informed
-	my $indname = $this->{PdlInds}{$pdl}[$ind];
-	my $indno = $this->{PdlIndCounts}{$pdl}[$ind];
-	my $indtot = $this->{PdlIndTotCounts}{$pdl}[$ind];
-# See if substitutions
-	my $substname = ($indtot>1 ? $indname.$indno : $indname);
-	my $incname = $indname.$indno;
-	my $index;
-	if($subst->{$substname}) {$index = delete $subst->{$substname};}
-	else {
-# No => get the one from the nearest context.
-		for(@$context) {
-			if($_->[0] eq $indname) {$index = $_->[1]; break;}
-		}
-	}
-	if(!$index) {croak "Index not found: $pdl, $ind\n";}
-	return $pdl."_".$incname."_inc"."*". $index;
-}
-
 sub do_macroaccess {my($this,$pdl,$inds) = @_;
-	$pdl =~ /T([BSULFD]+)/ or croak("Macroaccess wrong: $pdl\n");
+	$pdl =~ /T([BSULFD]+)/ or confess("Macroaccess wrong: $pdl\n");
 	my @lst = split ',',$inds;
 	my @ilst = split '',$1;
-	if($#lst != $#ilst) {croak("Macroaccess: different nos of args $pdl $inds\n");}
+	if($#lst != $#ilst) {confess("Macroaccess: different nos of args $pdl $inds\n");}
 	return join ' ',map {
 		"THISIS_$ilst[$_]($lst[$_])"
 	} (0..$#lst) ;
-}
-
-sub do_pointeraccess {my($this,$pdl) = @_;
-	return "(${pdl}_datap ".
-		(join '', map {/[A-Z]/ ? " + ${pdl}_${_}_offs " : ()}
-		 @{$this->{PdlInds}{$pdl}})." /* PACC */)";
 }
 
 #
@@ -550,28 +880,17 @@ sub do_pointeraccess {my($this,$pdl) = @_;
 sub do_access { my($this,$access,$context) = @_;
 # Parse the access
 	$access =~ /^\$([a-zA-Z]+)\(([^)]*)\)/ or
-		croak ("Access wrong: $access\n");
+		confess ("Access wrong: $access\n");
 	my $pdl = $1; 
 	my $inds = $2;
 	if($pdl =~ /^T/) {
 		return do_macroaccess($this,$pdl,$inds);
 	} elsif($pdl eq "P") {
-		return do_pointeraccess($this,$inds);
+		return $this->{Pdls}{$inds}->do_pointeraccess();
+	} else {
+		return ($this->{Pdls}{$pdl}->do_access($inds,$context)). 
+			"/* ACCESS($access) */";
 	}
-# Parse substitutions into hash
-	my %subst = map {/^\s*(\w+)\s*=>\s*(\w*)\s*$/ or croak "Invalid subst $_\n"; ($1,$2)} split ',',$inds;
-# Generate the text
-	my $text = "(${pdl}_datap)"."[";
-	$text .= join '+',map {
-		$this->do_indterm($pdl,$_,\%subst,$context);
-	} (0..$#{$this->{PdlInds}{$pdl}});
-	$text .= "]";
-# If not all substitutions made, the user probably made a spelling
-# error. Barf.
-	if(scalar(keys %subst) != 0) {
-		croak("Substitutions left: ".(join ',',keys %subst)."\n");
-	}
-	return "$text /* ACCESS($access) */";
 }
 
 # Make the parameter lists for the XSUB
@@ -599,38 +918,24 @@ sub print_xsheader { my($this) = @_;
 # This is the trickiest part of the whole thing.
 sub print_xsdiminit { my($this) = @_;
 # Initialize dims to zero
-	$this->printxs("\tlong __restend; long __ind; long __creating; long __flag; long __mult;\n");
-	for (keys %{$this->{IndPdls}}) {
-		my $ind = $_;
-		if(/[A-Z0-9]+/) {
-			$this->printxs("\tlong ${_}_ndims = -1; long *${_}_sizes = NULL, *${_}_inds = NULL,".
-			  (join',',map {"*${_}_${ind}_incs = NULL, ${_}_${ind}_offs"}
-			    @{$this->{PdlNames}}
-			  )
-			  .";\n");
-			next;
-		} 
-		if(!$this->{IndCheck}{$_}) {
-			$this->printxs("\tlong ${_}_size = -1, ${_}_incs = -1 ;\n");
-		}
-	}
+	$this->printxs("\tlong __restend; long __ind; 
+		long __creating; long __flag; long __mult;
+		long __nthreaddims=-1; int *__threaddims,*__threadinds;
+		long __nimplthreaddims=0; long *__implthreadinds;
+		long *__implthreaddims;\n");
+	my @pdls = map {$this->{Pdls}{$_}} @{$this->{PdlOrder}};
+	$this->printxs(join "",map {$_->get_xsinddecls()} @pdls);
+	$this->printxs(join "",map {$_->get_xsdecls()} values %{$this->{Inds}});
+	$this->printxs(join "",map {$_->get_xsimplthread1()} @pdls);
+	$this->printxs(
+	 "__implthreadinds = PDL->malloc(sizeof(int)*__nimplthreaddims);
+	 __implthreaddims = PDL->malloc(sizeof(int)*__nimplthreaddims);
+	 for(__ind=0; __ind<__nimplthreaddims; __ind++) 
+	 	__implthreaddims[__ind] = 1;");
+	$this->printxs(join "",map {$_->get_xsimplthread2()} @pdls);
+	$this->printxs(join "",map {$_->get_xsnormdimchecks()} @pdls);
+	$this->printxs(join "",map {$_->get_xsthreaddimchecks()} @pdls);
 	my $pdl;
-	for $pdl (@{$this->{PdlNames}}) {
-# Make the index increments. Here, if the same index repeats, all repetitions
-# need to have their increments.
-		my $ind;
-		$this->printxs("\tlong ".(join',',
-		   map {$ind=$_; 
-		         "${pdl}_$this->{PdlInds}{$pdl}[$ind]$this->{PdlIndCounts}{$pdl}[$ind]_inc"
-		   	    }
-			    0..$#{$this->{PdlInds}{$pdl}}).";\n");
-		$this->printxs("\tlong ${pdl}_ndims;\n");
-	}
-#	for (@{$this->{PdlNames}}) {
-#		$this->printxs(qq#\tif(${_}.datatype != PDL_D) {croak("NON-DOUBLE!\n");}\n#);
-#	}
-# Now, loop over the matrices, filling in the dimensions.
-# Check at compile-time to see when the rest dimensions are defined.
 	my %restdef=();
 	for(@{$this->{PdlOrder}}) {
 		my $pdl = $_;
@@ -650,133 +955,42 @@ sub print_xsdiminit { my($this) = @_;
 		if($#undef > 0) {
 			carp "More than one restind undefined!\n";
 		}
-# Calculate number of defined indices 
-# and compare (run-time to actual number)
-		$this->printxs("\t${_}_ndims = 0 ".(
-			join '',map {"+ $_";} map {
-				(defined($undef[0]) and $_ eq $undef[0]) ? () :
-				/[A-Z]/ ? "${_}_ndims" : "1";
-			} @{$this->{PdlInds}{$_}}).";\n");
-		$this->printxs("\t__creating=0;\n");
-		if($#undef == 0) {
-# The undefined rest index must be the last one for now :(
-# And we *HOPE* that no-one tries to do this with an output variable.
-			if($this->{PdlInds}{$_}[-1] ne $undef[0]) {
-				carp "Undef restind not last!\n";
-			}
-			$this->printxs(
-			 qq#\tif(${_}_ndims > ${_}.ndims) {croak("Too many dims for $_\\n");}\n#
-			);
-			$this->printxs(
-			 "\t$undef[0]_ndims = ${_}.ndims - ${_}_ndims;
-			  $undef[0]_sizes = PDL->malloc(sizeof(int) * $undef[0]_ndims);
-			  $undef[0]_inds = PDL->malloc(sizeof(int) * $undef[0]_ndims);".(
-			  join '',map {"
-			  ${_}_$undef[0]_incs = PDL->malloc(sizeof(int) * $undef[0]_ndims);"}
-			  	@{$this->{PdlNames}}
-			)."
-			  for(__ind = 0; __ind < $undef[0]_ndims; __ind++) {
-			  	$undef[0]_sizes[__ind] = ${_}.dims[__ind + ${_}_ndims];
-			  }\n"
-			);
-			$restdef{$undef[0]} = 1;
-		} else {
-# Here is the first point where we start looking at whether we should
-# create the pdl.
-			$this->printxs("\tif(${_}_ndims != ${_}.ndims)".
-			 ($isoutput ? "__creating=1;\n" :
-			  qq#{croak("Dimensions unequal!\\n");}\n#));
-		}
-# Test the dimension sizes.
-# Alternatively, if this pdl is not defined, create the matrix
-# with these dimensions.
-# Now, test whether the indices are equal.
-# It looks very compilcated but is actually pretty straightforward.
-		$this->printxs("\t__flag=0;__mult=1;${pdl}_ndims=0;\n");
-		my $a;
-		my $no=0;
-		$this->printxs(join '',
-		  map {
-		    $no++;
-		    /[A-Z]/ ? "\tfor(__ind=0; __ind<${_}_ndims; __ind++) {
-		       ${pdl}_${_}_incs[__ind] = __mult; __mult *= ${_}_sizes[__ind];
-		       if(!__creating && 
-		         ${pdl}.dims[${pdl}_ndims] != ${_}_sizes[__ind]) 
-		       	{__flag++; __creating++;
-			 if(!$isoutput) croak(\"Dimensions not match ${pdl} $_ \");} 
-			 ${pdl}_ndims++;}\n"
-		       :"
-		        if(${_}_size == -1) {${_}_size = ${pdl}.dims[${pdl}_ndims];}
-		        ${pdl}_${_}$this->{PdlIndCounts}{$pdl}[$no-1]_inc 
-				= __mult; __mult *= ${_}_size;
-		        if(!__creating && 
-			 ${pdl}.dims[${pdl}_ndims] != ${_}_size) 
-			   {__flag++; __creating++;
-			    if(!$isoutput) croak(\"Dimensions no match ${pdl} $_\");}
-			${pdl}_ndims++;\n"}
-		    @{$this->{PdlInds}{$_}});
-#		$this->printxs(qq#\tif(__flag) {croak("Some dimensions not equal!\\n");}\n#);
-# Then, if necessary, go and create it.
-		if($isoutput) {
-		$this->printxs("if(__creating) {\n");
-# First, allocate the new dims.
-		$this->printxs("${pdl}.dims = PDL->malloc(${pdl}_ndims * sizeof(int));\n");
-		$this->printxs("${pdl}.ndims = ${pdl}_ndims; ${pdl}_ndims=0;\n");
-#		$this->printxs(qq#printf("Recreating ${pdl}: %d\n",${pdl}.ndims);#);
-# Then, fill them up.
-		my $no=0;
-		$this->printxs(join '',
-		  map {
-		    $no++;
-		    if( /[A-Z]/ ) {"\tfor(__ind=0; __ind<${_}_ndims; __ind++) {
-		         ${pdl}.dims[${pdl}_ndims++] = ${_}_sizes[__ind];}"}
-		    else {
-#			qq#printf("Recreating ${pdl}: %d %d\n",
-#			 ${pdl}_ndims, ${_}_size);\n#.
-			 "${pdl}.dims[${pdl}_ndims++] = ${_}_size;\n"}}
-		    @{$this->{PdlInds}{$_}});
-# Grow the pdl.
-		$this->printxs("\tPDL->grow(&(${pdl}), __mult);\n");
-		$this->printxs("\tPDL->unpackdims((SV*)${pdl}.sv, ${pdl}.dims, ${pdl}.ndims);\n");
-		$this->printxs("}\n");
-		}
 	}
 }
 
 # Print the code to start the loop over the "rest" parameters
 sub print_xsloopstart { my($this) = @_;
-	$this->printxs("\t/* Starting loop over rest-dimensions */\n");
-	for(keys %{$this->{RestInds}}) {
-		$this->printxs(
-		 qq#\tfor(__ind=0; __ind<${_}_ndims; __ind++) ${_}_inds[__ind] = 0;\n#);
-	}
+	$this->printxs("\t/* Starting loop over thread-dimensions */\n");
+	$this->printxs(
+	 qq#\tfor(__ind=0; __ind<__nthreaddims; __ind++) __threadinds[__ind] = 0;
+	    for(__ind=0; __ind<__nimplthreaddims; __ind++) __implthreadinds[__ind] = 0;\n#);
 	$this->printxs("\t__restend=0; while(!__restend) { ");
  	my $pdl;
-	for $pdl (@{$this->{PdlNames}}) {
-	for(keys %{$this->{RestInds}}) {
-		$this->printxs(
-		 qq#\t${pdl}_${_}_offs=0;
-		  for(__ind=0; __ind<${_}_ndims; __ind++) ${pdl}_${_}_offs+= ${_}_inds[__ind]*${pdl}_${_}_incs[__ind] ;\n#);
-	}
-	}
+	$this->printxs(
+		join '',map {
+			$this->{Pdls}{$_}->get_xsthreadoffs();
+		} (@{$this->{PdlOrder}})) ;
 }
 
 # Print the code
 sub print_xscode { my($this) = @_;
 	$this->printxs("\t/* This is the actual user-code */\n");
-	$this->printxs($this->{Code});
+	$this->printxs("\t{\n$this->{Code}}");
 }
 
 # End the loop
 sub print_xsloopend { my($this) = @_;
 	$this->printxs("\t/* Ending loop over rest-dimensions */\n");
-	$this->{ContLoopInd}++;
-	my $contloop = "contloop".$this->{ContLoopInd};
-	for(keys %{$this->{RestInds}}) {
-		$this->printxs(
-		 qq#\tfor(__ind=0; __ind<${_}_ndims; __ind++) {if(++(${_}_inds[__ind]) >= ${_}_sizes[__ind]) {${_}_inds[__ind]=0; break;} else goto $contloop;} \n#);
-	}
-	$this->printxs("\t__restend=1;\n\t$contloop: 1;}\n");
+	$this->printxs("\t__restend=1;\n");
+	$this->printxs(
+	 qq#\tfor(__ind=0; __ind<__nthreaddims; __ind++) 
+	 	{if(++(__threadinds[__ind]) >= __threaddims[__ind]) 
+		 {__threadinds[__ind]=0;} else {__restend=0; break;} ;} 
+	      if(!__restend) continue;
+	      for(__ind=0; __ind<__nimplthreaddims; __ind++) 
+	 	{if(++(__implthreadinds[__ind]) >= __implthreaddims[__ind]) 
+		 {__implthreadinds[__ind]=0;} else {__restend=0; break;} ;} \n#);
+	$this->printxs("\t;}\n");
 }
 
 sub print_xsfooter { my($this) = @_;
@@ -790,25 +1004,18 @@ sub print_xsfooter { my($this) = @_;
 sub print_xscoerce { my($this) = @_;
 	$this->printxs("\tlong __datatype=PDL_B;\n");
 # First, go through all the types, selecting the most general.
-	for(@{$this->{PdlNames}}) {
-		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
-			$this->printxs("\tif($_.datatype > __datatype)
-				__datatype = $_.datatype;\n");
-		} else {
-			print "Not doing $_: has int type\n";
-			$this->printxs(qq%\tif($_.datatype != PDL_L) croak("Invalid datatype for $_: should be long\n");%);
-		}
+	for(@{$this->{PdlOrder}}) {
+		$this->printxs($this->{Pdls}{$_}->get_xsdatatypetest());
 	}
 # See which types we are allowed to use.
 	$this->printxs("\tif(0) {}\n");
 	for(@{$this->get_generictypes()}) {
 		$this->printxs("\telse if(__datatype <= $_->[2]) __datatype = $_->[2];\n");
-	}
+	} 
+	$this->printxs("\telse {croak(\"Too high type %d given!\\n\",__datatype);}");
 # Then, coerce everything to this type.
-	for(@{$this->{PdlNames}}) {
-		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
-			$this->printxs("\tPDL->converttype(&($_),__datatype,1);\n");
-		}
+	for(@{$this->{PdlOrder}}) {
+		$this->printxs($this->{Pdls}{$_}->get_xscoerce());
 	}
 }
 
@@ -826,17 +1033,14 @@ sub print_xsgenericitem { my($this,$item) = @_;
 		$this->printxs("#undef THISIS_$_\n#define THISIS_$_(a)\n");
 	}
 	$this->printxs("#undef THISIS_$item->[3]\n#define THISIS_$item->[3](a) a\n");
-	for(@{$this->{PdlNames}}) {
-		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
-			$this->printxs("\t$item->[1] *${_}_datap = ($item->[1] *)${_}.data;\n");
-		} else {
-			$this->printxs("\tlong *${_}_datap = (long *)${_}.data;\n");
-		}
-	}
+	$this->printxs(join '',map{
+		$this->{Pdls}{$_}->get_xsdatapdecl($item->[1]);
+	} (@{$this->{PdlNames}})) ;
 }
 
 sub print_xsgenericend { my($this) = @_;
-	$this->printxs("\t}}\n");
+	$this->printxs("\tbreak;}
+		default:croak(\"PP INTERNAL ERROR! PLEASE MAKE A BUG REPORT\\n\");}\n");
 }
 
 sub get_generictypes { my($this) = @_;
