@@ -12,9 +12,9 @@ use PDL::Core::Dev;            # Pick up development utilities
 WriteMakefile(
  'NAME'  	=> 'PDL::Experiment',
 # 'VERSION_FROM'	=> 'PP.pm',
- VERSION	=> '0.001',
  'TYPEMAPS'     => [PDL_TYPEMAP], 
- 'OBJECT'       => 'Experiment$(OBJ_EXT)',
+ 'OBJECT'       => 'Experiment$(OBJ_EXT)',           
+ PM 	=> {'Experiment.pm' => '$(INST_LIBDIR)/Experiment.pm'},
  'INC'          => PDL_INCLUDE,
  'LIBS'         => [''],
  'clean'        => {'FILES'  => 'Experiment.xs'},
@@ -22,7 +22,7 @@ WriteMakefile(
 
 sub MY::postamble {
 '
-Experiment.xs: experiment.pd
+Experiment.xs Experiment.pm: experiment.pd ../PP.pm
 	perl experiment.pd 
 '
 }  # Add genpp rule

@@ -22,43 +22,9 @@ defpdl(
 	%}'
 );
 
-# Same, but copy column 2 all over instead
-defpdl(
-	'PDLTEST2',
-	[qw/a(x,y,X) [o]b(y,x,X)/],
-	'',
-	'loop(x) %{
-	 	loop(y) %{
-			$b() = $a(x => 2);
-		%}
-	%}'
-);
-
-# Copy to new 1st dimension
-defpdl(
-	'PDLTEST3',
-	[qw/a(X) [o]b(n,X)/],
-	'int n_size',
-	'loop(n) %{
-		$b() = $a();
-	%}'
-);
-
-# Check whether x1 and x2 works.
-defpdl(
-	'PDLTEST4',
-	[qw/a(x,y,X) [o]b(y,x,X)/],
-	'int c',
-	'loop(x0,x1) %{
-	 	loop(y) %{
-			$b(x => x0) += $a(x => x1);
-		%}
-	%}'
-);
-
 # Matrix multiplication.  See how naturally this comes out!!!
 defpdl(
-	'PDLTEST5',
+	'PDLTEST2',
 	[qw/a(xa,xy,X) b(xy,yb,X) [o]c(xa,yb,X)/],
 	'',
 	'loop(xa,yb) %{
@@ -67,6 +33,16 @@ defpdl(
 			tmp += $a() * $b();
 		%}
 		$c() = tmp;
+	%}'
+);
+
+# Check whether x1 and x2 works.
+defpdl(
+	'PDLTEST3',
+	[qw/a(x,x) [o]b(x,x)/],
+	'int c',
+	'loop(x0,x1) %{
+		$b(x0=>x0,x1=>x1) = $a(x0=>x1,x1=>x0) + x0 + 2*x1;
 	%}'
 );
 

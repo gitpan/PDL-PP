@@ -1,15 +1,12 @@
-==============
+=======================
 	
-	PDL:PP v0.001
+	PDL:PP 
 
-==============
+=======================
 
-This is the first packaged release of the PDL:PP compiler.
+PDL::PP is a module that programmers can use to generate XSUB
+code that interfaces with PDL easily.
 
-This package provides a compiler that can be used to compile
-concise representations of functions into XSUBS that do
-all the necessary dimension-checking etc. for PDL.
-
-Requirements: PDL
+Requirements: PDL1.00, perl5.003_01
 
 	Tuomas J. Lukka (lukka@fas.harvard.edu)

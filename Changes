@@ -1,0 +1,21 @@
+0.002 => 0.003
+
+Nothing, made a mistake in uploading to PAUSE.
+
+0.001 => 0.002
+
+Added possibility of having second argument as a semicolon-separated
+string.
+
+data a(var,var) should work now with accesses
+$a(var0=>foo,var1=>bar)
+
+"Rest" indices now work with "...". "..." is converted to "_DOTS_".
+
+Different datatypes and type coercion: a rudimentary implementation.
+
+PDL::PP now writes also the .pm file automatically.
+
+0.001 
+
+Initial release
