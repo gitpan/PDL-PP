@@ -1,3 +1,9 @@
+0.003 => 0.004
+
+Added $P(...) and $TSD(...) syntax for the fortran interface
+as well as the ability to specify which types to genericize to
+using the TYPES:BSU directive.
+
 0.002 => 0.003
 
 Nothing, made a mistake in uploading to PAUSE.

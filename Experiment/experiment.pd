@@ -23,11 +23,14 @@ defpdl(
 );
 
 # Matrix multiplication.  See how naturally this comes out!!!
+# At the same time, test whether the type-conditionals work.
 defpdl(
 	'PDLTEST2',
 	[qw/a(xa,xy,X) b(xy,yb,X) [o]c(xa,yb,X)/],
 	'',
-	'loop(xa,yb) %{
+	'
+	 printf("MMTYPE: "$TBSULFD("B","S","U","L","F","D")"\n");
+	 loop(xa,yb) %{
 		double tmp=0;
 	 	loop(xy) %{
 			tmp += $a() * $b();
@@ -36,10 +39,10 @@ defpdl(
 	%}'
 );
 
-# Check whether x1 and x2 works.
+# Check whether x1 and x2 works, on types float and double
 defpdl(
 	'PDLTEST3',
-	[qw/a(x,x) [o]b(x,x)/],
+	[qw/a(x,x) [o]b(x,x) TYPES:FD/],
 	'int c',
 	'loop(x0,x1) %{
 		$b(x0=>x0,x1=>x1) = $a(x0=>x1,x1=>x0) + x0 + 2*x1;

@@ -12,10 +12,11 @@ PDL::PP - Generate PDL routines from concise descriptions
 
 	defpdl(
 		'Transpose',
-		'a(x,y,X); int [o]b(y,x,X)',
+		'a(x,y,X); int [o]b(y,x,X); TYPES:BSULFD;',
 		'int c',
 		'loop(x,y) %{
 			$b() = $a();
+			$TFD(do_when_float, do_when_double);
 		%}'
 	);
 
@@ -82,6 +83,15 @@ is the output.
 The indices part is a comma-separated list of lowercase index names or 
 "..." or an uppercase index name for a "rest" index.
 
+One of the strings in the second argument can be of the type
+
+	TYPES:whichtypes
+
+where whichtypes consists of a combination of the letters C<bsulfd>
+meaning for which datatypes this function should be build for. The default
+is all but if you are interfacing to a function library, for instance,
+the function may only be defined for some data type.
+
 =head2 Indices
 
 C<defpdl> uses named indices. In the first example, there were two named
@@ -127,6 +137,12 @@ However, special cases always arise and for those, the syntax
 may be used (here the sizes could be C<[qw/[o]a(x,x) b(x) c(x)/]>, in 
 which case this sets a to the outer product of b and c.
 
+There is also the special case pointer access C<$P(x)> which gives you
+a pointer to the first element of C<x> in the current rest dimension
+indexes. Note that if you are using this and someone starts mapping
+indices, you are in big trouble. This is for use only when you are
+passing arguments to outside functions.
+
 =head2 Naming
 
 For user access, there are some standard naming conventions.
@@ -134,6 +150,21 @@ All loop variables have just the name inside the C<loop> declaration.
 Index sizes have the name of the index followed by C<_size>.
 The same name is used if it is necessary to specify the dimension
 of an output variable as a parameter.
+
+=head2 Type coercion
+
+Usually, you don't have to worry about type coercion. What happens
+is that PP converts all pdls to which you have not specified a
+type to the highest common denominator.
+
+Currently, it is only possible to specify pdls to be integer or the generic
+type.
+
+Often, when interfacing with fortran, there are two different versions
+of a subroutine for singles and doubles which are called relatively
+similarly. C<$T[typechars](typeactions)> provides a way to do this:
+typechars is a sequence of the characters C<BSULFD> and typeactions
+a comma-separated list.
 
 =head1 INFLUENCES
 
@@ -169,17 +200,19 @@ times. The outer loops should update pointers to the data
 accessed inside to be efficient. However, the comfort of writing code
 like this is very nice.
 
-The current type coercion is not good.
+The current type coercion is not good. Especially the fortran
+hack should be generalized in some way.
 
 =head1 AUTHOR
 
-Copyright (C) 1995 Tuomas J. Lukka (Tuomas.Lukka@helsinki.fi)
+Copyright (C) 1996 Tuomas J. Lukka (lukka@fas.harvard.edu)
 
 =cut
 
 sub print {print @_;}
 
 package PDL::PP;
+use PDL::Core;
 use FileHandle;
 require Exporter;
 @ISA = qw(Exporter);
@@ -285,6 +318,7 @@ sub defpdl {
 		NAME => $name,
 		MODULE => $::PDLMOD,PACKAGE => $::PDLPACK,
 		PDLS => $pdls, PARS => $others, CODE => $code,
+		Types => 'BSULFD',
 	};
 	add_exported($name);
 	bless $this,PDL::PP;
@@ -316,7 +350,15 @@ sub parse_pdls { my($this) = @_;
 		$this->{PDLS} = [map {
 			/^\s*$/ ? () : $_; 	# Eliminate empties
 		} split ';',$this->{PDLS}];
-		
+	}
+	my $typ;
+	@{$this->{PDLS}} = 
+		map {
+			if(/^\s*TYPES:/ ) {$typ=$_; ();} else {$_}
+		} (@{$this->{PDLS}});
+	if($typ) {
+		$typ =~ /^\s*TYPES:([BSULFD]+)\s*$/ or croak("Invalid types: $typ\n");
+		$this->{Types} = $1;
 	}
 # And get the info out of each one.
 	for (@{$this->{PDLS}}) {
@@ -398,7 +440,7 @@ sub parse_code { my($this) = @_;
 	my @stack = ($coderef);
 	my $control;
 	while($_) {
-		s/^(.*?)(\$[a-z]+\([^)]*\)|\bloop\([^)]+\)\s*%{|%}|$)//s or
+		s/^(.*?)(\$[a-zA-Z]+\([^)]*\)|\bloop\([^)]+\)\s*%{|%}|$)//s or
 			croak("Invalid program $_");
 		$control = $2;
 #		if(!($1 =~ /^\s*$/)) {
@@ -410,7 +452,7 @@ sub parse_code { my($this) = @_;
 			if($control =~ /^loop\(([^)]+)\) %{/) {
 				push @{$stack[-1]},[[split ',',$1]];
 				push @stack,$stack[-1][-1];
-			} elsif($control =~ /^\$[a-z]+\([^)]*\)/) {
+			} elsif($control =~ /^\$[a-zA-Z]+\([^)]*\)/) {
 				push @{$stack[-1]},$control;
 			} elsif($control =~ /^%}/) {
 				pop @stack;
@@ -485,13 +527,38 @@ sub do_indterm { my($this,$pdl,$ind,$subst,$context) = @_;
 	return $pdl."_".$incname."_inc"."*". $index;
 }
 
+sub do_macroaccess {my($this,$pdl,$inds) = @_;
+	$pdl =~ /T([BSULFD]+)/ or croak("Macroaccess wrong: $pdl\n");
+	my @lst = split ',',$inds;
+	my @ilst = split '',$1;
+	if($#lst != $#ilst) {croak("Macroaccess: different nos of args $pdl $inds\n");}
+	return join ' ',map {
+		"THISIS_$ilst[$_]($lst[$_])"
+	} (0..$#lst) ;
+}
+
+sub do_pointeraccess {my($this,$pdl) = @_;
+	return "(${pdl}_datap ".
+		(join '', map {/[A-Z]/ ? " + ${pdl}_${_}_offs " : ()}
+		 @{$this->{PdlInds}{$pdl}})." /* PACC */)";
+}
+
+#
+# This function encodes one access to a variable
+#
 sub do_access { my($this,$access,$context) = @_;
 # Parse the access
-	$access =~ /^\$([a-z]+)\(([^)]*)\)/ or
+	$access =~ /^\$([a-zA-Z]+)\(([^)]*)\)/ or
 		croak ("Access wrong: $access\n");
 	my $pdl = $1; 
+	my $inds = $2;
+	if($pdl =~ /^T/) {
+		return do_macroaccess($this,$pdl,$inds);
+	} elsif($pdl eq "P") {
+		return do_pointeraccess($this,$inds);
+	}
 # Parse substitutions into hash
-	my %subst = map {/^\s*(\w+)\s*=>\s*(\w*)\s*$/ or croak "Invalid subst $_\n"; ($1,$2)} split ',',$2;
+	my %subst = map {/^\s*(\w+)\s*=>\s*(\w*)\s*$/ or croak "Invalid subst $_\n"; ($1,$2)} split ',',$inds;
 # Generate the text
 	my $text = "(${pdl}_datap)"."[";
 	$text .= join '+',map {
@@ -686,6 +753,7 @@ sub print_xsfooter { my($this) = @_;
 
 sub print_xscoerce { my($this) = @_;
 	$this->printxs("\tint __datatype=PDL_B;\n");
+# First, go through all the types, selecting the most general.
 	for(@{$this->{PdlNames}}) {
 		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
 			$this->printxs("\tif($_.datatype > __datatype)
@@ -695,6 +763,12 @@ sub print_xscoerce { my($this) = @_;
 			$this->printxs(qq%\tif($_.datatype != PDL_L) croak("Invalid datatype for $_: should be long\n");%);
 		}
 	}
+# See which types we are allowed to use.
+	$this->printxs("\tif(0) {}\n");
+	for(@{$this->get_generictypes()}) {
+		$this->printxs("\telse if(__datatype <= $_->[2]) __datatype = $_->[2];\n");
+	}
+# Then, coerce everything to this type.
 	for(@{$this->{PdlNames}}) {
 		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
 			$this->printxs("\tPDL->converttype(&($_),__datatype,1);\n");
@@ -704,11 +778,18 @@ sub print_xscoerce { my($this) = @_;
 
 sub print_xsgenericstart { my($this) = @_;
 	$this->printxs("/* Start generic loop */\n");
+	for(B,S,U,L,F,D) {
+		$this->printxs("#undef THISIS_$_\n#define THISIS_$_(a)\n");
+	}
 	$this->printxs("\tswitch(__datatype) { case -42: /* Warning eater */ {1;\n");
 }
 
 sub print_xsgenericitem { my($this,$item) = @_;
 	$this->printxs("\t} break; case $item->[0]: {\n");
+	for(B,S,U,L,F,D) {
+		$this->printxs("#undef THISIS_$_\n#define THISIS_$_(a)\n");
+	}
+	$this->printxs("#undef THISIS_$item->[3]\n#define THISIS_$item->[3](a) a\n");
 	for(@{$this->{PdlNames}}) {
 		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
 			$this->printxs("\t$item->[1] *${_}_datap = ($item->[1] *)${_}.data;\n");
@@ -722,12 +803,15 @@ sub print_xsgenericend { my($this) = @_;
 	$this->printxs("\t}}\n");
 }
 
-sub get_generictypes {
-	return [[PDL_B,"unsigned char"],
-		[PDL_S,"short"],
-		[PDL_US,"unsigned short"],
-		[PDL_L,"long"],
-		[PDL_F,"float"],
-		[PDL_D,"double"]];
+sub get_generictypes { my($this) = @_;
+	return [map {
+		$this->{Types} =~ /$_->[0]/ ? [PDL_.($_->[0]eq"U"?"US":$_->[0]),$_->[1],$_->[2],$_->[0]] : ()
+	}
+	       ([B,"unsigned char",$PDL_B],
+		[S,"short",$PDL_S],
+		[U,"unsigned short",$PDL_US],
+		[L,"long",$PDL_L],
+		[F,"float",$PDL_F],
+		[D,"double",$PDL_D])];
 }
 
