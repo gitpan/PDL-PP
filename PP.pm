@@ -291,6 +291,7 @@ sub new {
 	print "PDL: '$1', '$2', '$3', '$4'\n";
 	my($opt1,$opt2,$name,$inds) = ($1,$2,$3,$4);
 	$this->{Name} = $name;
+	$this->{PName} = $parent->{NAME};
 	$this->{Flags} = [(split ',',$opt2),($opt1?$opt1:())];
 	for(@{$this->{Flags}}) {
 		/^o$/ and $this->{FlagOut}=1 and $this->{FlagCreat}=1 or
@@ -413,7 +414,8 @@ sub get_xsimplthread2 { my($this) = @_;
 		if($pdl.dims[__ind] == 1) { continue; }
 		if(__implthreaddims[__ind - $ninds] < $pdl.dims[__ind]) {
 			if(__implthreaddims[__ind - $ninds] != 1) {
-				croak(\"Invalid dimension %d given for $pdl: incompatible with threading 1\\n\",__ind);
+				croak(\"$this->{PName}: Invalid dimension %d given for $pdl: incompatible with threading 1 (was %d)\\n\",__ind,
+					$pdl.dims[__ind]);
 			}
 			__implthreaddims[__ind - $ninds] = $pdl.dims[__ind];
 		} else if(__implthreaddims[__ind - $ninds] != $pdl.dims[__ind]) {
@@ -438,7 +440,8 @@ sub get_xsnormdimchecks { my($this) = @_;
 	 }
 	".
 	"if($this->{Name}.ndims < $#{$this->{Inds}}+1) {
-		croak(\"Too few dimensions for $this->{Name}\\n\");
+		croak(\"$this->{PName}: Too few dimensions for $this->{Name} (ndims: %d, was %d)\\n\",
+			$#{$this->{Inds}}+1, $pdl.ndims);
 	 }" .
 	("for(__ind=0;__ind < $this->{Name}.ndims; __ind++) 
 		if($this->{Name}.dims[__ind] == 1) {
@@ -454,7 +457,8 @@ sub get_xsnormdimchecks { my($this) = @_;
 			   } else if($this->{Name}.dims[$_] == 1) {
 			      /* Do nothing */
 			   } else {
-				croak(\"Wrong dimension $this->{Inds}[$_] for $this->{Name}\\n\");
+				croak(\"$this->{PName}: Wrong dimension $this->{Inds}[$_] for $this->{Name} (should be: %d, was %d)\\n\",
+				 $this->{Inds}[$_]_size, $this->{Name}.dims[$_]);
 			    }
 			}
 		__inc_$this->{Name}_".$this->get_indname($_)." =
@@ -469,15 +473,22 @@ sub get_xsthreaddimchecks { my($this) =@_;
 			/* Do nothing. Must test for this in threadloop!!! */
 		} else if(__nthreaddims == -1) {
 			__nthreaddims = $pdl.nthreaddims;
-			__threaddims = $pdl.threaddims;
+			__threaddims = PDL->malloc(sizeof(int) * __nthreaddims);
+			for(__ind=0; __ind < __nthreaddims; __ind++) {
+				__threaddims[__ind] = $pdl.threaddims[__ind];
+			}
 			__threadinds = PDL->malloc(sizeof(int) * __nthreaddims);
 		} else {
-			croak(\"Unequal number of threaded dims for $pdl\\n\");
+			croak(\"$this->{PName}:Unequal number of threaded dims for $pdl\\n\");
 		}
 	 }
 	 for(__ind = 0; __ind < __nthreaddims; __ind++) {
-	 	if($pdl.threaddims[__ind] != __threaddims[__ind]) {
-			croak(\"Unequal thread dimension %d for $pdl\\n\",__ind);
+	 	if($pdl.threaddims[__ind] != __threaddims[__ind] &&
+		   $pdl.threaddims[__ind] != 1) {
+		   	if(__threaddims[__ind] == 1) {
+				__threaddims[__ind] = $pdl.threaddims[__ind];
+			} else 
+			  croak(\"$this->{PName}:Unequal thread dimension %d for $pdl\\n\",__ind);
 		}
 	 }";
 }
@@ -687,7 +698,6 @@ sub defpdl {
 	bless $this,PDL::PP;
 	$this->parse_pdls();
 	$this->parse_pars();
-	$this->parse_dims();
 	$this->make_parlist();
 	$this->parse_code();
 	$this->print_xsheader();
@@ -766,7 +776,7 @@ sub get_indobj_make {
 	if(defined $this->{Inds}{$name}) {
 		$indobj = $this->{Inds}{$name};
 	} else {
-		$indobj = new PDL::PP::Ind($expr);
+		$indobj = new PDL::PP::Ind($name);
 		$this->{Inds}{$name}=$indobj;
 		if(defined $this->{Pars}{$name."_size"}) {
 			$this->{Inds}{$name}->set_outsidepar($name."_size");
@@ -774,20 +784,6 @@ sub get_indobj_make {
 	}
 	if(defined $val) { $indobj->add_value($val); }
 	return $indobj;
-}
-
-sub parse_dims { my($this) = @_;
-	for(values %{$this->{Pdls}}) {
-		for (@{$_->{Inds}}) {
-			$this->{Inds}{$_} = 1;
-		}
-	}
-	for(keys %{$this->{Inds}}) {
-		$this->{Inds}{$_} = new PDL::PP::Ind($_);
-		if(defined $this->{Pars}{$_."_size"}) {
-			$this->{Inds}{$_}->set_outsidepar($_."_size");
-		}
-	}
 }
 
 # Do the appropriate substitutions in the code.

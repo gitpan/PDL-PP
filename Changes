@@ -1,3 +1,11 @@
+0.006 => 0.007
+
+Started changing error messages to better ones
+Some important bug fixes to threading (now $a->thread()) works
+with more than one argument (blush).
+
+Thread.pm is included (blush**2)
+
 0.005 => 0.006
 
 Huge number of changes:
