@@ -1,3 +1,8 @@
+0.010 <= 0.009
+
+Just small cosmetics, lots of bug fixes and a couple of new functions.
+Nothing major.
+
 0.009 <= 0.008
 
 Supports type conversion and new PDL creation from null() better.

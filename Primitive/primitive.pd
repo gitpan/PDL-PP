@@ -176,6 +176,19 @@ defpdl(
 	'
 );
 
+=head2 axisvalues(a(n))
+
+	a(i) = i
+
+=cut
+
+defpdl(
+	'axisvalues',
+	'a(n)',
+	'',
+	'loop(n) %{ $a() = n; %}'
+);
+
 =head2 assign(a(),b())
 
 	b() = a()

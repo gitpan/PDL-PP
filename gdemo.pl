@@ -4,7 +4,7 @@ use blib '../slatec';
 # A demonstration on how to use gaussians.
 
 use PDL;
-use PDL::Gaussian;
+require 'Gaussian.pm';
 use Data::Dumper;
 
 # One 1-Dimensional gaussian

@@ -1193,6 +1193,9 @@ sub print_xsfooter { my($this) = @_;
 ####
 #
 # Type coercion
+#
+# Now, if TYPES:F given and double arguments, will coerce.
+
 
 sub print_xscoerce { my($this) = @_;
 	$this->printxs("\tlong __datatype=PDL_B;\n");
@@ -1205,6 +1208,8 @@ sub print_xscoerce { my($this) = @_;
 	for(@{$this->get_generictypes()}) {
 		$this->printxs("\telse if(__datatype <= $_->[2]) __datatype = $_->[2];\n");
 	} 
+	$this->{Types} =~ /F/ and (
+		$this->printxs("\telse if(__datatype == PDL_D) {__datatype = PDL_F; /* Cast double to float */}\n"));
 	$this->printxs("\telse {croak(\"Too high type %d given!\\n\",__datatype);}");
 # Then, coerce everything to this type.
 	for(@{$this->{PdlOrder}}) {

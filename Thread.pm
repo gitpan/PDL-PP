@@ -136,7 +136,6 @@ sub thread {
 	print "THREADING: "; $this->printdims();
 	$this->_ensureincs();
 	my $new = $this->_shallowcopy();
-	$new->{ThreadInstrs} = [@_];
 	for(@_) {
 # Move dimension $_ from Dims and Incs to ThreadDims and ThreadIncs
 		if($_ == -1) {
@@ -153,6 +152,22 @@ sub thread {
 	$new->{Incs} = [map {$_ eq "X" ? () : $_} @{$new->{Incs}}];
 	print "NEW: "; $new->printdims(); print "\n";
 	return $new;
+}
+
+=head2 unthread
+
+Unthread takes the threaded-over dimensions and inserts them to the 
+I<n>th place of the real dimensions.
+
+=cut
+
+sub unthread {
+	my ($this,$n) = shift;
+	my $new = $this->_shallowcopy();
+	splice @{$new->{Dims}},$n,0, @{$new->{ThreadDims}};
+	splice @{$new->{Incs}},$n,0, @{$new->{ThreadIncs}};
+	$new->{ThreadDims} = [];
+	$new->{ThreadIncs} = [];
 }
 
 =head2 xchg
@@ -213,6 +228,37 @@ sub asvector {
 	$new->{Dims} = [$val];
 	$new->{Incs} = [1];
 	return $new;
+}
+
+=head2 clump
+
+	$a->clump(n)
+
+This clumps the first n dimensions of $a together, if possible.
+If you have manipulated $a before so that the Incs are not right,
+you lose. Assumes that the first dimension has the smallest increment.
+
+=cut
+
+sub clump {
+	my($this,$n) = shift;
+	my $new = $this->_shallowcopy();
+	if(!$n) {$n = $#{$new->{Incs}} + 1;}
+	my @incs = splice @{$new->{Incs}},0,$n,1;
+	my @dims = splice @{$new->{Dims}},0,$n,1;
+# Sanity check. 
+	my @both;
+	for(0..$#incs) {push @both,[$incs[$_],$dims[$_]];}
+	@both = sort {$a->[0] <=> $b->[0];} @both;
+	my $prod = $both[0][1];
+	for(1..$#both) {
+		if($both[$_][0] != $both[$_-1][0] * $both[$_-1][1]) {
+			croak("clump: Increments do not match!\n");
+		}
+		$prod *= $both[$_][1];
+	}
+	$new->{Incs}[0] = $both[0][0];
+	$new->{Dims}[0] = $prod;
 }
 
 =head2 printdims
@@ -292,13 +338,19 @@ sub _adddummies {
 sub _shallowcopy {
 	my $this = shift;
 	my $new = bless {}, ref($this);
-	for ( grep(($_ ne "PDL" and $_ ne "Data"), keys %$this) ) {   # Efficient to ignore Data here
+	for ( grep(($_ ne "PDL" and $_ ne "Data" and $_ ne "Datatype"), 
+		keys %$this) ) {   # Must ignore Data and Datatype.
 		$$new{$_} = PDL::Core::rcopyitem( $$this{$_} );  # Deep copy
 	}
 	if(ref $this->{Data}) {
 		$$new{Data} = $$this{Data};
 	} else {
 		$$new{Data} = \$this->{Data}; # Special, make reference
+	}
+	if(ref $this->{Datatype}) {
+		$$new{Datatype} = $$this{Datatype};
+	} else {
+		$$new{Datatype} = \$this->{Datatype}; # Special, make reference
 	}
 	return $new;
 }
