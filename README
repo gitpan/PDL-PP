@@ -1,0 +1,15 @@
+==============
+	
+	PDL:PP v0.001
+
+==============
+
+This is the first packaged release of the PDL:PP compiler.
+
+This package provides a compiler that can be used to compile
+concise representations of functions into XSUBS that do
+all the necessary dimension-checking etc. for PDL.
+
+Requirements: PDL
+
+	Tuomas J. Lukka (lukka@fas.harvard.edu)

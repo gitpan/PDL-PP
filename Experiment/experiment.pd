@@ -1,0 +1,73 @@
+# REPLACE FOLLOWING BY
+#
+# use PDL::PP qw/PDL::Experiment PDL::Experiment Experiment/;
+# 
+# when using not in this package.
+
+require '../PP.pm';
+PDL::PP->import(qw/PDL::Experiment PDL::Experiment Experiment/);
+
+# TEST CASE:
+# Exchange two first dimensions.
+# Once mapping is in place, this becomes very powerful.
+
+defpdl(
+	'PDLTEST1',
+	[qw/a(x,y,X) [o]b(y,x,X)/],
+	'int c',
+	'loop(x) %{
+	 	loop(y) %{
+			$b() = $a();
+		%}
+	%}'
+);
+
+# Same, but copy column 2 all over instead
+defpdl(
+	'PDLTEST2',
+	[qw/a(x,y,X) [o]b(y,x,X)/],
+	'',
+	'loop(x) %{
+	 	loop(y) %{
+			$b() = $a(x => 2);
+		%}
+	%}'
+);
+
+# Copy to new 1st dimension
+defpdl(
+	'PDLTEST3',
+	[qw/a(X) [o]b(n,X)/],
+	'int n_size',
+	'loop(n) %{
+		$b() = $a();
+	%}'
+);
+
+# Check whether x1 and x2 works.
+defpdl(
+	'PDLTEST4',
+	[qw/a(x,y,X) [o]b(y,x,X)/],
+	'int c',
+	'loop(x0,x1) %{
+	 	loop(y) %{
+			$b(x => x0) += $a(x => x1);
+		%}
+	%}'
+);
+
+# Matrix multiplication.  See how naturally this comes out!!!
+defpdl(
+	'PDLTEST5',
+	[qw/a(xa,xy,X) b(xy,yb,X) [o]c(xa,yb,X)/],
+	'',
+	'loop(xa,yb) %{
+		double tmp=0;
+	 	loop(xy) %{
+			tmp += $a() * $b();
+		%}
+		$c() = tmp;
+	%}'
+);
+
+done();
