@@ -1,3 +1,8 @@
+# This script fails for now because the current version does not
+# support creation.
+#
+# This will eventually change.
+
 use blib;
 use PDL;
 use PDL::Experiment;
@@ -12,7 +17,7 @@ $b = pdl [[0,0,0],[0,0,0]],[[0,0,0],[0,0,0]]
 	;
 
 $c = $a->thread(2); $d = $b->thread(2);
-$e = $a->shallowcopy();
+$e = $a->_shallowcopy();
 
 # print Dumper(%{$a}),"\n";
 # print Dumper(%{$e}),"\n";

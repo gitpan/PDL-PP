@@ -1,3 +1,18 @@
+0.008 <= 0.007
+
+New format for Changes -file
+
+NBasic: initial support for generating PDL operators using PDL::PP.
+Not yet complete
+
+New types() -syntax
+
+The parser and code generator is once again slightly more object-oriented.
+
+Numerous bug fixes
+
+Started creating HOOK support.
+
 0.006 => 0.007
 
 Started changing error messages to better ones

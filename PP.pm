@@ -13,13 +13,13 @@ PDL::PP - Generate PDL routines from concise descriptions
 	defpdl(
 		'inner_product',
 		'a(x); b(x); c(); TYPES:BSULFD;',
-		'int d',
 		'double tmp = 0;
 		 loop(x) %{
 		 	tmp += $a() * $b();
 			$TFD(do_when_float, do_when_double);
 		%}
-		 $c() = tmp;'
+		 $c() = tmp;',
+		 PP::Add_Call_Parameters('int foo'),
 	);
 
 	done();
@@ -228,6 +228,38 @@ similarly. C<$T[typechars](typeactions)> provides a way to do this:
 typechars is a sequence of the characters C<BSULFD> and typeactions
 a comma-separated list.
 
+=head2 Customization
+
+Because this kind of code generation will be fairly widely used, 
+it is necessary to be able to customize many steps of the process.
+For example, we really want to be able to do any kinds of strange
+things. The current solution is to add "hooks" into many 
+places of the code generation. This is not the way I really would
+like to do it, this is not object-oriented but it works for now.
+
+And it is possible to retain almost the same user interface later.
+
+After the C code, there can be any number of Hook objects,
+for example in the above SYNOPSIS, the row
+		 
+	 PP::Add_Call_Parameters->new('int foo'),
+
+creates a hook object that C<defpdl> will call when it is making
+up the parameter list for the xsub. The hook has the possibility
+to modify the parameter list in any way it chooses but this particular
+hook only adds a new parameter "int foo".
+
+In the most general form, to be implemented later, the whole PDL::PP
+defpdl routine simply calls a predefined sequence of hooks and the user
+has the possibility to insert his/her own hooks in any place. This would
+be a kind of a "blackboard" approach, allowing interesting pre- and 
+postprocessing at any phase of the operation.
+
+One important application of hooks is when it is necessary to 
+do some time or space-consuming operations outside the implicit and
+datatype loops, for example the implementation of binary ops for PDL 
+will work this way.
+
 =head1 INFLUENCES
 
 The ideas here have been influenced by the language Yorick as well as
@@ -357,11 +389,12 @@ sub do_indterm { my($this,$pdl,$ind,$subst,$context) = @_;
 	if(defined $subst->{$substname}) {$index = delete $subst->{$substname};}
 	else {
 # No => get the one from the nearest context.
-		for(@$context) {
+		for(reverse @$context) {
 			if($_->[0] eq $indname) {$index = $_->[1]; break;}
 		}
 	}
-	if(!defined $index) {confess "Index not found: $pdl, $ind, $indname\n";}
+	if(!defined $index) {confess "Access Index not found: $pdl, $ind, $indname
+		On stack:".(join ' ',map {"($_->[0],$_->[1])"} @$context)."\n" ;}
 	return "__inc_$pdl"."_".$incname."*". $index;
 }
 
@@ -585,6 +618,175 @@ sub get_xsdecls { my($this) = @_;
 }
 
 #####################################################################
+#
+# Encapsulate the parsing code objects
+# 
+# All objects have two methods: 
+# 	new - constructor
+#	get_str - get the string to be put into the xsub.
+
+###########################
+# 
+# Encapsulate a block
+
+package PDL::PP::Block;
+
+sub new { my($type) = @_; bless [],$type; }
+
+sub myoffs { return 0; }
+sub myprelude {}
+sub mypostlude {}
+sub get_str {my ($this,$parent,$context) = @_; 
+   $this->myprelude($parent,$context) . 
+   (join '',map {ref $_ ? $_->get_str($parent,$context) : $_} 
+	@{$this}[$this->myoffs()..$#{$this}]) .
+   $this->mypostlude($parent,$context);}
+
+###########################
+# 
+# Encapsulate a loop
+
+package PDL::PP::Loop;
+@PDL::PP::Loop::ISA = PDL::PP::Block;
+
+sub new { my($type,$args) = @_;
+	bless [$args],$type;
+}
+
+sub myoffs { return 1; }
+sub myprelude { my($this,$parent,$context) = @_;
+	my $text = ""; my $i;
+	push @$context, map {
+		$i = $parent->make_loopind($_);
+		$text .= "{/* Open $_ */ long $_; 
+			for($_=0; $_<$i->[0]_size; $_++) {";
+		$i;
+	} @{$this->[0]};
+	return $text;
+}
+sub mypostlude { my($this,$parent,$context) = @_;
+	splice @$context, - ($#{$this->[0]}+1);
+	return join '',map {"}} /* Close $_ */"} @{$this->[0]};
+}
+
+###########################
+# 
+# Encapsulate a threadloop
+
+package PDL::PP::ThreadLoop;
+use Carp;
+@PDL::PP::ThreadLoop::ISA = PDL::PP::Block;
+
+sub new { my($type) = @_; bless [],$type; }
+sub myoffs { return 0; }
+sub myprelude {my($this,$parent,$context) = @_;
+'	/* THREADLOOPBEGIN */' .
+ (qq#\tfor(__ind=0; __ind<__nthreaddims; __ind++) __threadinds[__ind] = 0;
+   for(__ind=0; __ind<__nimplthreaddims; __ind++) __implthreadinds[__ind] = 0;
+   __restend=0; while(!__restend) { 
+   #) .
+ (join '',map {$parent->{Pdls}{$_}->get_xsthreadoffs();} @{$parent->{PdlOrder}})
+}
+
+sub mypostlude {my($this,$parent,$context) = @_;
+'	/* THREADLOOPEND */
+	__restend = 1;
+	for(__ind=0; __ind<__nthreaddims; __ind++) 
+	 	{if(++(__threadinds[__ind]) >= __threaddims[__ind]) 
+		 {__threadinds[__ind]=0;} else {__restend=0; break;} ;} 
+	      if(!__restend) continue;
+	      for(__ind=0; __ind<__nimplthreaddims; __ind++) 
+	 	{if(++(__implthreadinds[__ind]) >= __implthreaddims[__ind]) 
+		 {__implthreadinds[__ind]=0;} else {__restend=0; break;} ;}
+      } /* Close threadloop */
+	'
+}
+
+
+###########################
+# 
+# Encapsulate a types() switch
+
+package PDL::PP::Types;
+use Carp;
+@PDL::PP::Types::ISA = PDL::PP::Block;
+
+sub new { my($type,$ts) = @_; 
+	$ts =~ /[BSULFD]+/ or confess "Invalid type access with '$ts'!";
+	bless [$ts],$type; }
+sub myoffs { return 1; }
+sub myprelude {my($this,$parent,$context) = @_;
+	"\n#if ". (join '||',map {"(THISIS_$_(1)+0)"} split '',$this->[0])."\n";
+}
+
+sub mypostlude {my($this,$parent,$context) = @_;
+	"\n#endif\n"
+}
+
+
+###########################
+# 
+# Encapsulate an access
+
+package PDL::PP::Access;
+use Carp;
+
+sub new { my($type,$str) = @_;
+	$str =~ /^\$([a-zA-Z]+)\(([^)]*)\)/ or
+		confess ("Access wrong: $access\n");
+	my($pdl,$inds) = ($1,$2);
+	if($pdl =~ /^T/) {new PDL::PP::MacroAccess($pdl,$inds);} 
+	elsif($pdl =~ /^P/) {new PDL::PP::PointerAccess($pdl,$inds);}
+	else {
+		bless [$pdl,$inds],$type;
+	}
+}
+
+sub get_str { my($this,$parent,$context) = @_;
+	$parent->{Pdls}{$this->[0]}->do_access($this->[1],$context);
+}
+
+
+###########################
+# 
+# Encapsulate a Pointeraccess
+
+package PDL::PP::PointerAccess;
+use Carp;
+
+sub new { my($type,$pdl,$inds) = @_; bless [$pdl,$inds],$type; }
+
+sub get_str {my($this,$parent,$context) = @_;
+	$parent->{Pdls}{$this->[0]}->do_pointeraccess();
+}
+
+###########################
+# 
+# Encapsulate a macroaccess
+
+package PDL::PP::MacroAccess;
+use Carp;
+
+sub new { my($type,$pdl,$inds) = @_; bless [$pdl,$inds],$type; }
+
+sub get_str {my($this,$parent,$context) = @_;
+	my ($pdl,$inds) = @{$this};
+	$pdl =~ /T([BSULFD]+)/ or confess("Macroaccess wrong: $pdl\n");
+	my @lst = split ',',$inds;
+	my @ilst = split '',$1;
+	if($#lst != $#ilst) {confess("Macroaccess: different nos of args $pdl $inds\n");}
+	return join ' ',map {
+		"THISIS_$ilst[$_]($lst[$_])"
+	} (0..$#lst) ;
+}
+
+
+ #####################################################################
+#####################################################################
+##
+## 
+## Here starts the actual thing.
+#
 package PDL::PP;
 use PDL::Core;
 use FileHandle;
@@ -687,13 +889,14 @@ $::PDLPM;
 #
 
 sub defpdl {
-	my($name,$pdls, $others, $code) = @_;
+	my($name,$pdls, $others, $code, @hooks) = @_;
 	my($this) = {
 		NAME => $name,
 		MODULE => $::PDLMOD,PACKAGE => $::PDLPACK,
-		PDLS => $pdls, PARS => $others, CODE => $code,
+		PDLS => $pdls, PARS => $others, CODE => "{$code}",
 		Types => 'BSULFD',
 	};
+	for(@hooks) {$this->add_hook($_)}
 	add_exported($name);
 	bless $this,PDL::PP;
 	$this->parse_pdls();
@@ -707,13 +910,24 @@ sub defpdl {
 	$this->print_xsgenericstart();
 	for(@{$this->get_generictypes()}) {
 		$this->print_xsgenericitem($_);
-		$this->print_xsloopstart();
 		$this->print_xscode();
-		$this->print_xsloopend();
 	}
 	$this->print_xsgenericend();
 	$this->printxs("\t}\n");
 	$this->print_xsfooter();
+}
+
+sub add_hook { my($this,$hook) = @_;
+	my @types = $hook->get_type();
+	for(@types) {
+		push @{$this->{HOOK_$_}}, $hook;
+	}
+}
+
+sub run_hooks { my($this,$type) = @_;
+	for(@{$this->{HOOK_.$type}}) {
+		$_->run($this,$type);
+	}
 }
 
 # Parse the pdl parameters and form a data structure
@@ -792,12 +1006,20 @@ sub parse_code { my($this) = @_;
 # First, separate the code into an array of C fragments (strings),
 # variable references (strings starting with $) and
 # loops (array references, 1. item = variable.
-	my $coderef = [""];
+	my $coderef = new PDL::PP::Block;
 	my @stack = ($coderef);
 	my $control;
+	my $threadloops = 0;
 	while($_) {
-		s/^(.*?)(\$[a-zA-Z]+\([^)]*\)|\bloop\([^)]+\)\s*%{|%}|$)//s or
-			confess("Invalid program $_");
+# Parse next statement
+		s/^(.*?) # First, some noise is allowed. This may be bad.
+		   ( \$[a-zA-Z]+\([^)]*\)   # $a(...): access
+		    |\bloop\([^)]+\)\s*%{   # loop(..) %{
+		    |\btypes\([^)]+\)\s*%{  # types(..) %{
+		    |\bthreadloop\s*%{        # threadloop %{
+		    |%}                     # %}
+		    |$)//xs
+			or confess("Invalid program $_");
 		$control = $2;
 #		if(!($1 =~ /^\s*$/)) {
 #			print "1: $1\n";
@@ -805,11 +1027,21 @@ sub parse_code { my($this) = @_;
 #		}
 		if($control) {
 #			print("2: $control\n");
-			if($control =~ /^loop\(([^)]+)\) %{/) {
-				push @{$stack[-1]},[[split ',',$1]];
-				push @stack,$stack[-1][-1];
+			if($control =~ /^loop\(([^)]+)\)\s*%{/) {
+				my $ob = new PDL::PP::Loop([split ',',$1]);
+				push @{$stack[-1]},$ob;
+				push @stack,$ob;
+			} elsif($control =~ /^types\(([^)]+)\)\s*%{/) {
+				my $ob = new PDL::PP::Types($1);
+				push @{$stack[-1]},$ob;
+				push @stack,$ob;
+			} elsif($control =~ /^threadloop\s*%{/) {
+				my $ob = new PDL::PP::ThreadLoop();
+				push @{$stack[-1]},$ob;
+				push @stack,$ob;
+				$threadloops ++;
 			} elsif($control =~ /^\$[a-zA-Z]+\([^)]*\)/) {
-				push @{$stack[-1]},$control;
+				push @{$stack[-1]},new PDL::PP::Access($control);
 			} elsif($control =~ /^%}/) {
 				pop @stack;
 			} else {
@@ -819,87 +1051,40 @@ sub parse_code { my($this) = @_;
 			print("No \$2!\n");
 		}
 	}
+# Now, if there is no threadlooping,
+# enclose everything into it.
+	if(!$threadloops) {
+		my $nc = $coderef;
+		$coderef = new PDL::PP::ThreadLoop();
+		push @{$coderef},$nc;
+	}
 # Then, in this form, put it together what we want the code to actually do.
 #	print Dumper($coderef);
-	$this->{Code} = $this->tree2code($coderef,[]);
+	$this->{Code} = $coderef->get_str($this,[]);
 }
 
-sub tree2code { my($this,$code,$context) = @_;
-	my $str = "";
-	my $ind = -1;
-	for(@$code) {
-		$ind++; if($ind == 0) {next};
-		if(ref $_) {
-			$str .= $this->do_loop($_,$context);
-		} elsif(/^\$/) {
-			$str .= $this->do_access($_,$context);
-		} else {
-			$str .= $_;
+# This sub determines the index name for this index. 
+# For example, a(x,y) and x0 becomes [x,x0]
+sub make_loopind { my($this,$ind) = @_;
+	my $orig = $ind;
+	while(!$this->{Inds}{$ind}) {
+		if(!((chop $ind) =~ /[0-9]/)) {
+			confess("Index not found for $_ ($ind)!\n");
 		}
-	}
-	return $str;
-}
-
-sub do_loop { my($this,$loop,$context) = @_;
-	my @newcontext=();
-	my $text=""; my $endtext = "";
-	for(@{$loop->[0]}) {
-# Determine, which index this is. Chop one numeric character while not found.
-		my $ind = $_;
-		while(!$this->{Inds}{$ind}) {
-			if(!((chop $ind) =~ /[0-9]/)) {
-				confess("Index not found for $_ ($ind)!\n");
-			}
 		}
-		$text .= "{long $_; for($_=0; $_<${ind}_size; $_++)";
-		$endtext .= "}";
-		push @newcontext, [$ind,$_];
-	}
-	push @newcontext,@{$context};
-	return "$text /* LOOP(".(join ',',(@{$loop->[0]})).")*/ {" . $this->tree2code($loop,\@newcontext)
-		. "}$endtext";
-}
-
-sub do_macroaccess {my($this,$pdl,$inds) = @_;
-	$pdl =~ /T([BSULFD]+)/ or confess("Macroaccess wrong: $pdl\n");
-	my @lst = split ',',$inds;
-	my @ilst = split '',$1;
-	if($#lst != $#ilst) {confess("Macroaccess: different nos of args $pdl $inds\n");}
-	return join ' ',map {
-		"THISIS_$ilst[$_]($lst[$_])"
-	} (0..$#lst) ;
-}
-
-#
-# This function encodes one access to a variable
-#
-sub do_access { my($this,$access,$context) = @_;
-# Parse the access
-	$access =~ /^\$([a-zA-Z]+)\(([^)]*)\)/ or
-		confess ("Access wrong: $access\n");
-	my $pdl = $1; 
-	my $inds = $2;
-	if($pdl =~ /^T/) {
-		return do_macroaccess($this,$pdl,$inds);
-	} elsif($pdl eq "P") {
-		return $this->{Pdls}{$inds}->do_pointeraccess();
-	} else {
-		return ($this->{Pdls}{$pdl}->do_access($inds,$context)). 
-			"/* ACCESS($access) */";
-	}
+	return [$ind,$orig];
 }
 
 # Make the parameter lists for the XSUB
+# XXX
 sub make_parlist { my($this) = @_;
-	$this->{ShortPars} = 
-	 join ',',@{$this->{PdlNames}},map {
-	 	/\w\s+(\w+)/ or die "Invalid parameter $_";
-		$1;
-		} split ',',$this->{PARS};
+	$this->{ParList} = [(map {["pdl",$_]} @{$this->{PdlNames}}),
+		map {/^(\w+\**)\s+(\w+)$/ or die "Invalid parameter $_"; [$1,$2]}
+			split ',',$this->{PARS}];
+	$this->run_hooks("CALLPARAMS");
+	$this->{ShortPars} = join ',',map {$_->[1]} @{$this->{ParList}};
 	$this->{LongPars} = 
-	 join '',map {"\t$_\n"}
-	  (map {"pdl $_"} @{$this->{PdlNames}}),
-	  split ',',$this->{PARS};
+		join '',map {"\t$_->[0] $_->[1]\n"} @{$this->{ParList}};
 }
 
 # Print the simple prototype of the XSUB function
@@ -954,39 +1139,11 @@ sub print_xsdiminit { my($this) = @_;
 	}
 }
 
-# Print the code to start the loop over the "rest" parameters
-sub print_xsloopstart { my($this) = @_;
-	$this->printxs("\t/* Starting loop over thread-dimensions */\n");
-	$this->printxs(
-	 qq#\tfor(__ind=0; __ind<__nthreaddims; __ind++) __threadinds[__ind] = 0;
-	    for(__ind=0; __ind<__nimplthreaddims; __ind++) __implthreadinds[__ind] = 0;\n#);
-	$this->printxs("\t__restend=0; while(!__restend) { ");
- 	my $pdl;
-	$this->printxs(
-		join '',map {
-			$this->{Pdls}{$_}->get_xsthreadoffs();
-		} (@{$this->{PdlOrder}})) ;
-}
-
 # Print the code
 sub print_xscode { my($this) = @_;
-	$this->printxs("\t/* This is the actual user-code */\n");
+	$this->printxs("\t/* This is the actual user-code, edited a little by us */\n");
+	$this->{Code} =~ s/\n(\s*\n)+/\n/g;
 	$this->printxs("\t{\n$this->{Code}}");
-}
-
-# End the loop
-sub print_xsloopend { my($this) = @_;
-	$this->printxs("\t/* Ending loop over rest-dimensions */\n");
-	$this->printxs("\t__restend=1;\n");
-	$this->printxs(
-	 qq#\tfor(__ind=0; __ind<__nthreaddims; __ind++) 
-	 	{if(++(__threadinds[__ind]) >= __threaddims[__ind]) 
-		 {__threadinds[__ind]=0;} else {__restend=0; break;} ;} 
-	      if(!__restend) continue;
-	      for(__ind=0; __ind<__nimplthreaddims; __ind++) 
-	 	{if(++(__implthreadinds[__ind]) >= __implthreaddims[__ind]) 
-		 {__implthreadinds[__ind]=0;} else {__restend=0; break;} ;} \n#);
-	$this->printxs("\t;}\n");
 }
 
 sub print_xsfooter { my($this) = @_;

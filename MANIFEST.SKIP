@@ -1,0 +1,16 @@
+\.tar\.gz$
+\.lck$
+Makefile\.old
+Makefile$
+Makefile\.aperl
+\.o$
+\.c$
+\.xs$
+NBasic\.pm
+Experiment\.pm
+pm_to_blib
+\.bs
+RCS
+^mail1$
+^mail2$
+^blib/

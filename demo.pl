@@ -2,6 +2,7 @@ use blib;
 use PDL;
 use PDL::Experiment;
 use PDL::Thread;
+use PDL::NBasic;
 use Data::Dumper;
 
 # In Experiment/experiment.pd I define three functions:
@@ -38,8 +39,11 @@ print "A NOW:\n",$a,"B NOW:\n",$b;
 assgn($b->thread(0),$a->thread(0));
 print "A NOW:\n",$a,"B NOW:\n",$b;
 
+my_biop1($a->thread(1),$b->thread(0),$a->thread(1),"+");
 
-print "A: ",Dumper($a->{Data}),"\nC:",Dumper($c->{Data}),"\n";
+print "A NOW:\n",$a,"B NOW:\n",$b;
+
+# print "A: ",Dumper($a->{Data}),"\nC:",Dumper($c->{Data}),"\n";
 
 
 

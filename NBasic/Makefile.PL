@@ -10,17 +10,19 @@ use lib '../..';
 use PDL::Core::Dev;            # Pick up development utilities
 
 WriteMakefile(
- 'NAME'  	=> 'PDL::PP',
+ 'NAME'  	=> 'PDL::NBasic',
 # 'VERSION_FROM'	=> 'PP.pm',
- VERSION	=> '0.008',
  'TYPEMAPS'     => [PDL_TYPEMAP], 
- 'OBJECT'       => '',
+ 'OBJECT'       => 'NBasic$(OBJ_EXT)',           
+ PM 	=> {'NBasic.pm' => '$(INST_LIBDIR)/NBasic.pm'},
  'INC'          => PDL_INCLUDE,
  'LIBS'         => [''],
- 'clean'        => {},
+ 'clean'        => {'FILES'  => 'NBasic.xs'},
 );
 
 sub MY::postamble {
 '
+NBasic.xs NBasic.pm: nbasic.pd ../PP.pm
+	perl nbasic.pd 
 '
 }  # Add genpp rule

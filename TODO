@@ -1,0 +1,11 @@
+
+Severe problem: 
+type conversions. Currently, if some routine starts converting a map()ed
+type, you lose. Badly. The routine should at least barf if the PDL
+is a output pdl.
+
+[t],[o] should actually create, except when input explicitly threaded.
+
+Map: negative indices interpreted as from end.
+
+Physical copying & write back?
