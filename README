@@ -9,8 +9,13 @@ code that interfaces with PDL easily.
 
 Requirements: PDL1.02, perl5.003(_01?)
 
-See the file demo.pl for some comments on what
+See the file demo.pl and test.pl for some comments on what
 this can be used for.
+
+In the distribution are included also the modules
+	PDL::Primitive - some primitive stuff using PDL::PP
+	PDL::NBasic - unary and binary operators using PDL::PP
+	PDL::Gaussian - objects representing Gaussian functions
 
 See the file TODO for current problems.
 

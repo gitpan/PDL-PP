@@ -1,0 +1,11 @@
+
+use Benchmark;
+
+my $a = 5;
+
+sub foo {return $a;}
+
+timethis(100000,'
+	$b = foo(1);
+	'
+);

@@ -1,6 +1,6 @@
 use blib;
 use PDL;
-use PDL::Experiment;
+use PDL::Primitive;
 use PDL::Thread;
 use PDL::NBasic;
 use Data::Dumper;
@@ -14,40 +14,61 @@ use Data::Dumper;
 # Unfortunately, $a = $b doesn't work yet :( 
 #	Keep pressurizing perl5-porters ;)
 
-$a = double zeroes(6,6); $b = double pdl 1,2,3,4,5,6;
+# sub dumpabc {print Dumper(%$a), Dumper(%$b), Dumper(%$c);}
+sub dumpabc {}
+
+$a = double zeroes(8,8); $b = double pdl 1..8;
 print "A:"; $a->printdims();
 
 # Make $c into a slice of array $a.
 
-$c = $a->map('(3),:');
+$c = $a->map('(1),:');
 
 # The printout shows that we have a 1-dimensional slice.
 
 print "C:"; $c->printdims();
+dumpabc;
 
 # Assign to this slice the vector b
 
  assgn($b,$a);
+dumpabc;
  print "A NOW:\n",$a,"B NOW:\n",$b;
 
 $a *= 0;
+dumpabc;
+
+print "A ZEROES\n";
 
 assgn($b->thread(0),$c->thread(0));
+dumpabc;
 
-print "A NOW:\n",$a,"B NOW:\n",$b;
+print "A NOW1:\n",$a,"B NOW:\n",$b;
 
 assgn($b->thread(0),$a->thread(0));
-print "A NOW:\n",$a,"B NOW:\n",$b;
+dumpabc;
+print "A NOW2:\n",$a,"B NOW:\n",$b;
 
 my_biop1($a->thread(1),$b->thread(0),$a->thread(1),"+");
 
-print "A NOW:\n",$a,"B NOW:\n",$b;
+print "A NOW3:\n",$a,"B NOW:\n",$b;
 
 # print "A: ",Dumper($a->{Data}),"\nC:",Dumper($c->{Data}),"\n";
 
+# $a->thread(1) += $b;
 
+$b = double xvals zeroes(3,3);
+print "CREATION:\n";
 
+$a = null;
 
+print "A:",$a,"\n";
+
+assgn($b,$a);
+
+print "b:",$b,"\n";
+print "A:",$a,"\n";
+$a->printdims();
 
 
 # THREADING
@@ -62,4 +83,4 @@ print "A NOW:\n",$a,"B NOW:\n",$b;
 
 # inner($a->thread(0,-1), $b->thread(-1,1), $c->thread(0,1));
 
-
+print "DONE DONE\n";

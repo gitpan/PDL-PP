@@ -1,0 +1,155 @@
+=head1 NAME
+
+PDL::Indexing - user's guide to new PDL indexing
+
+=head1 DESCRIPTION
+
+This is an introduction manpage to complement the reference descriptions
+found in L<PDL::Thread> and L<PDL::PP>.
+
+With the advent of PDL::PP it has become possible to use the PDL
+indices to do creative things. 
+
+=head2 Threading
+
+The flexibility becomes apparent, for example, if you have a 3D PDL $a
+with the dimensions (3,5,6) and you have a C function f() that expects
+a 2D matrix. The different things that are possible here are numerous:
+First of all, we can do the very traditional
+
+	f($a);
+
+which calls f 6 times with a (3,5) matrix slice of $a each time
+(This is called I<implicit threading>).
+This is all that many systems allow you to do without copying the
+data inside $a into a new place. But that would be wasteful: 
+for example, f() may modify the contents of $a somehow and if we had
+copied $a to reshape it, the modifications would be lost or we would
+need to copy it back and ... AUUUUGH. Complicated.
+
+Ok, what do we do now? We can call f three times with matrices of size (5,6) 
+
+	f($a->thread(0));
+
+or 5 times with matrices of size (3,6)
+
+	f($a->thread(1));
+
+The command 
+
+	f($a->thread(2));
+
+is in this case equivalent to the default action of C<f($a)>
+except that now the threading is explicit, not implicit.
+
+=head2 Exchanging dimensions
+
+Well, that's all good and fine and so on but what if you want to give
+f 5 matrices of dimensions (6,3) i.e. the transposes. That's easy also:
+
+	f($a->xchg(0,2)->thread(1));
+
+where the call C<xchg> means "exchange dimensions 0 and 2". 
+This is equivalent to
+
+	f($a->thread(1)->xchg(0,1));
+
+(note how we must use C<xchg(0,1)> instead of C<xchg(0,2)>: $a->thread(1)
+is virtually 2-dimensional so the dimensions 0 and 2 of $a correspond
+to the dimensions 0 and 1 of the threaded pdl.
+
+=head2 Slicing and dicing
+
+So far, we have only threaded and exchanged dimensions: what
+if I only want to apply f to the indices (x,2,y) of $a?
+
+
+	f($a->map(':,(2),:'));
+
+does the trick. The parentheses around the 2 mean that we want
+a pdl with dimensions (3,6): 
+
+	$a->map(':,2,:');
+
+yields a pdl with dimensions (3,1,6) which would be interpreted as
+"call f six times with a (3,1) matrix each time".
+
+Map has several interesting syntaxes and is fairly powerful.
+See L<PDL::Thread>.
+
+=head2 How does it work?
+
+All the function calls described above return a new PDL object with
+a reference to $a->{Data} as their data member but with their
+other members (metadata) handled. PDL::PP-compiled routines look at
+the members {Dims}, {Incs}, {ThreadIncs} of the PDL to see what
+the semantics of the PDL are.
+
+=head2 Output value autocreation.
+
+(the syntax here is the proposed syntax which is not yet functional).
+
+Assume you're doing a very tight loop
+
+	while(foo) {
+		$b = zap($c,$d);
+		bar($b);
+	}
+
+This approach will allocate a new temporary pdl for $b each time 
+which is not desirable in the least. The new approach allows you
+to use
+
+	$b = pdl;
+	while(foo) {
+		zap_($c,$d,$b);
+		bar($b);
+	}
+
+which retains $b between iterations, after it is created at the first
+round. 
+
+=head2 Distinction between zeroes() and pdl()
+
+There is a very important difference between calling C<zeroes()> 
+and C<pdl()>. The former returns a pdl scalar (0-dimensional pdl vector
+with one element set to zero) and the latter returns a 1-dimensional
+pdl with zero elements I.e.
+
+	$a = byte zeroes(); 
+	 # $a->{Dims} == [], $a->{Data} = '\0'
+	$b = byte pdl();
+	 # $b->{Dims} == [0], $b->{Data} = ''
+
+The reason this is especially important is that both 0-dimensional
+pdls and 0-element (blank) pdls have their uses.
+
+The inner product of two 1-dimensional vectors is 0-dimensional
+so you need to use a scalar for the third argument of the C<inner()>
+function.
+
+If you wish the PDL::PP-compiled function to autocreate your pdl
+to have the right dimensions based on the input, you have to give
+it a blank pdl:
+
+	$b = pdl;
+	zap_($c,$d,$b);
+
+creates $b with the correct dimensions.
+
+However, if you do
+
+	$b = zeroes;
+	zap_($c,$d,$b);
+	
+you will probably get very weird results, depending what you are aiming
+to do.
+
+=head1 BUGS
+
+This manpage is not clear nor complete enough.
+
+=head1 AUTHOR
+
+Copyright (C) 1996 Tuomas J. Lukka (lukka@fas.harvard.edu)
+

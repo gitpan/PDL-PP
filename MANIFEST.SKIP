@@ -14,3 +14,6 @@ RCS
 ^mail1$
 ^mail2$
 ^blib/
+^man/
+MANIFEST\.bak$
+Primitive\.pm$

@@ -4,6 +4,8 @@ PDL::PPHooks - standard extensions for the PDL::PP preprocessor
 
 =head1 DESCRIPTION
 
+NOT REALLY THERE YET
+
 =cut
 
 package PP::Add_Call_Parameters;

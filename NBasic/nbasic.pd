@@ -13,7 +13,9 @@ PDL::PP->import(qw/PDL::NBasic PDL::NBasic NBasic/);
 @biops1  = qw( + * - / );
 @biops2  = qw( > < <= >= == != );
 @biops3  = qw( << >> | & ^ );
-@ufuncs  = qw( sqrt sin cos log exp abs ! ~ );
+
+@ufuncs1 = qw( sqrt sin cos abs );
+@ufuncs2 = qw( log exp ! ~ NOTHING );
 @bifuncs = qw( pow atan2 MODULO SPACESHIP );
 
 sub nofloat { # Decide which ops can't be done on floats/doubles
@@ -29,6 +31,7 @@ addhdr('
 #define MODULO(X,N)     ( (X) - (N)*((int)((X)/(N))) )
 #define SPACESHIP(A,B)  ( (2*((A)>(B))-1) * ((A)!=(B))  )
 #define abs(A)          ( (A)>0 ? (A) : -(A) )
+#define NOTHING
 ');
 
 
@@ -37,7 +40,7 @@ for (\@biops1, \@biops2, \@biops3) { $ind ++;
 defpdl("my_biop$ind",
 	'a(); b(); [o]c();',
 	"char* op",
-	q|printf("MYBIOP, '%s'\n",op);
+	q|/* printf("MYBIOP, '%s'\n",op); */
 	 if(0) {|.
 	(join '',map {qq^	} else if(!strcmp(op,"$_")) { 
 		^.(nofloat($_) ? ' types(BSUL) %{ ':''). qq^
@@ -45,7 +48,41 @@ defpdl("my_biop$ind",
 		\$c() = \$a() $_ \$b(); %} 
 		^.(nofloat($_) ? ' %} ':''). qq^
 		^ } @$_).
-	q|}; printf("OMYBIOP, '%s'\n",op); |,
+	q|}; /* printf("OMYBIOP, '%s'\n",op); */ |,
+);
+}
+
+my $ind = 0;
+for (\@bifuncs) { $ind ++;
+defpdl("my_bifunc$ind",
+	'a(); b(); [o]c();',
+	"char* op",
+	q|/* printf("MYBIFUNC, '%s'\n",op); */
+	 if(0) {|.
+	(join '',map {qq^	} else if(!strcmp(op,"$_")) { 
+		^.(nofloat($_) ? ' types(BSUL) %{ ':''). qq^
+		threadloop %{
+		\$c() = $_ (\$a() , \$b()); %} 
+		^.(nofloat($_) ? ' %} ':''). qq^
+		^ } @$_).
+	q|}; /* printf("OMYBIFUNC, '%s'\n",op); */ |,
+);
+}
+
+my $ind = 0;
+for (\@ufuncs1, \@ufuncs2) { $ind ++;
+defpdl("my_ufunc$ind",
+	'a(); [o]b();',
+	"char* op",
+	q|/* printf("MYBIOP, '%s'\n",op); */
+	 if(0) {|.
+	(join '',map {qq^	} else if(!strcmp(op,"$_")) { 
+		^.(nofloat($_) ? ' types(BSUL) %{ ':''). qq^
+		threadloop %{
+		\$b() = $_ (\$a()); %} 
+		^.(nofloat($_) ? ' %} ':''). qq^
+		^ } @$_).
+	q|}; /* printf("OMYBIOP, '%s'\n",op); */ |,
 );
 }
 

@@ -1,0 +1,192 @@
+# REPLACE FOLLOWING BY
+#
+# use PDL::PP qw/PDL::Experiment PDL::Experiment Experiment/;
+# 
+# when using not in this package.
+
+require '../PP.pm';
+PDL::PP->import(qw/PDL::Primitive PDL::Primitive Primitive/);
+
+=head1 NAME
+
+PDL::Primitive
+
+=head1 DESCRIPTION
+
+This module provides some primitive and useful functions defined 
+using PDL::PP and able to use the new indexing tricks.
+
+See L<PDL::Indexing> for how to use indices creatively.
+
+=head2 sumover(a(n),[o]b()), prodover(a(n),[o]b())
+
+	b() = sum_i a(i)
+	b() = prod_i a(i)
+
+
+=cut
+
+defpdl(
+	'sumover',
+	'a(n); [o]b();',
+	'',
+	'double tmp = 0;
+	 loop(n) %{ tmp += $a(); %}
+	 $b() = tmp;'
+);
+
+defpdl(
+	'prodover',
+	'a(n); [o]b();',
+	'',
+	'double tmp = 1;
+	 loop(n) %{ tmp *= $a(); %}
+	 $b() = tmp;'
+);
+
+=head2 inner(a(n),b(n),[o]c()), outer(a(n),b(m),c(n,m))
+
+These functions implement the inner and outer product over one
+dimensions, respectively. Naturally, it is possible to achieve
+the effects of outer product simply by threading over the '*' operator
+but this function is provided for completeness.
+
+=cut
+
+defpdl(
+	'inner',
+	'a(n); b(n); [o]c(); ', '',
+	'double tmp = 0;
+	 loop(n) %{ tmp += $a() * $b(); %}
+	 $c() = tmp;'
+);
+
+defpdl(
+	'outer',
+	'a(n); b(m); [o]c(n,m); ', '',
+	'loop(n,m) %{ $c() = $a() * $b(); %}'
+);
+
+=head2 inner2(a(n),b(n,m),c(m),[o]e())
+
+This function calculates the inner product a*b*c. Note that you should
+probably not thread over a and c since that would be very wasteful.
+Instead, you should use a temporary for b*c.
+
+=cut
+
+defpdl(
+	'inner2',
+	'a(n); b(n,m); c(m); [o]d();',
+	'',
+	'double tmp=0;
+	 loop(n,m) %{
+		tmp += $a() * $b() * $c();
+	 %}
+	 $d() = tmp;
+	 '
+);
+
+=head2 inner2t(a(j,n), b(n,m), c(m,k), [t]tmp(n,k), [o]d(j,k));
+
+This routine calculates the inner product a*b*c efficiently
+by using the temporary tmp. This operation only scales as N**3
+whereas threading using inner2 would scale as N**4.
+
+The reason for having this routine is that you do not need to
+have the same thread-dimensions for C<tmp> as for the other arguments,
+which in case of large numbers of matrices makes this much more
+memory-efficient.
+
+It is hoped that things like this could be taken care of as 
+closures at some point.
+
+=cut
+
+defpdl(
+	'inner2t',
+	'a(j,n); b(n,m); c(m,k); [t]tmp(n,k); [o]d(j,k));',
+	'',
+	'
+	 loop(n,k) %{ double tmp0 = 0;
+	 	loop(m) %{ tmp0 += $b() * $c(); %}
+		$tmp() = tmp0;
+	 %}
+	 loop(j,k) %{ double tmp1 = 1;
+	 	loop(n) %{ tmp1 += $a() * $tmp(); %}
+		$d() = tmp1;
+	%}'
+);
+
+=head2 index(a(n), int ind(), [o]c())
+
+This function provides index indirection.
+
+	c = a(ind());
+
+=cut
+
+defpdl(
+	'index',
+	'a(n); int ind(); [o]c();', '',
+	'int foo = $ind(); if(foo<0 || foo>=n_size) 
+		{croak("PDL::index: invalid index");}
+	 $c() = $a(n => foo);
+	'
+);
+
+=head2 minimum(a(n),[o]c()), maximum(a(n),[o]c())
+
+Self-explanatory.
+
+=cut
+
+for(['minimum','<'],
+    ['maximum','>']) {
+defpdl(
+	$_->[0],
+	'a(n); [o]c();','',
+	'double cur;
+	 loop(n) %{
+	 	if(!n || $a() '.$_->[1].' cur) {cur = $a();}
+	 %}
+	 $c() = cur;
+	'
+);
+}
+
+=head2 wtstat(a(n), wt(n), avg(), [o]b(), degree)
+
+This calculates a weighted statistic over the vector a. 
+The formula is  
+	
+	b() = sum_i wt * (a ** degree - avg) / sum_i wt
+
+=cut
+
+defpdl(
+	'wtstat',
+	'a(n); wt(n); avg(); [o]b();',
+	'int deg',
+	'double wtsum = 0;
+	 double statsum=0;
+	 loop(n) %{ wtsum += $wt(); 
+	 	statsum += $wt() * pow($a(), deg) - $avg(); %}
+	 $b() = statsum / wtsum;
+	'
+);
+
+=head2 assign(a(),b())
+
+	b() = a()
+
+=cut
+
+defpdl(
+	'assgn',
+	'a(); [o]b();',
+	'',
+	'$b() = $a();'
+);
+
+done();

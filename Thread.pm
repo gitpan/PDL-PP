@@ -42,9 +42,13 @@ Same as the previous but additionally, remove the index.
 
 Take the range number1 to number2
 
-=item number1:number:number2
+=item number1:number2:number3
 
-Take the range number1 to number2 with step number
+Take the range number1 to number2 with step number3.
+
+=item *
+
+Add a new dummy index of width 1.
 
 =back
 
@@ -56,21 +60,32 @@ sub map {
 	my @inds = split ',',$str;
 	my @parlist;
 	my @dummies;
+	my @newdummies;
 	my $ind;
+	my $nnewdummies = 0;
 	for $ind (0..$#inds) {
-		my $size = $this->{Dims}[$_]; $_ = $inds[$ind];
-# Now parse. Alternatives:
+		my $nthreal = $ind - $nnewdummies;
+		my $size = $this->{Dims}[$ind]; 
+		$_ = $inds[$ind];
+# Check for special cases
+		if(/^\*$/) {
+			$nnewdummies ++;
+			push @newdummies, $nthreal;
+			next;
+		}
+# Now parse. Alternative slices:
 		my (@p) = 
 		(/^:$/ ? (-1) :
 		/^([0-9]+)$/ ? (($1,1,$1)) : 
 		/^\(([0-9]+)\)$/ ? (((push @dummies,$ind)and()) , ($1,1,$1)) : 
 		/^([0-9]+):([0-9]+)$/ ? ($1,1,$2) :
-		/^([0-9]+):([0-9]+):([0-9]+)$/ ? ($1,$2,$3) :
+		/^([0-9]+):([0-9]+):([0-9]+)$/ ? ($1,$3,$2) :
 		croak ("Invalid index given to map: $_\n") );
-		if($p[0] != -1) { push @parlist,($ind,@p) }
+		if($p[0] != -1) { push @parlist,($nthreal,@p) }
 	}
 	print "SLICING ",(join ',',@parlist),"\n";
 	my $a = $this->_slice(@parlist);
+	$a->_adddummies(@newdummies);
 	$a->_obliterate(@dummies);
 	$a;
 }
@@ -118,6 +133,7 @@ and implicit threading or a combination of the two.
 
 sub thread {
 	my $this = shift;
+	print "THREADING: "; $this->printdims();
 	$this->_ensureincs();
 	my $new = $this->_shallowcopy();
 	$new->{ThreadInstrs} = [@_];
@@ -135,6 +151,7 @@ sub thread {
 	}
 	$new->{Dims} = [map {$_ eq "X" ? () : $_} @{$new->{Dims}}];
 	$new->{Incs} = [map {$_ eq "X" ? () : $_} @{$new->{Incs}}];
+	print "NEW: "; $new->printdims(); print "\n";
 	return $new;
 }
 
@@ -154,23 +171,48 @@ sub xchg {
 	}
 }
 
+=head2 subthread
+
 =head2 dummy
 
-	$a->dummy(n)
+	$a->dummy(n[,m])
 
 Inserts a dummy dimension as dimension I<n> of $a.
-A dummy dimension has increment of 0 and dimension of one.
+A dummy dimension has increment of 0 and dimension of one by default or
+I<m> if given.
 
 =cut
 
 sub dummy {
 	my $this = shift; 
-	for(@_) {
-		splice @{$this->{Dims}}, $_, 0, 1;
-		if($this->{Incs}) {
-			splice @{$this->{Incs}}, $_, 0, 0;
-		}
+	my($nth,$size) = @_;
+	if(!$size) {$size = 1;}
+	splice @{$this->{Dims}}, $_, 0, $size;
+	if($this->{Incs}) {
+		splice @{$this->{Incs}}, $_, 0, 0;
 	}
+}
+
+=head2 asvector
+
+	$a->asvector()
+
+This changes the whole pdl structure into one-dimensional vector. 
+The idea is that after this it is easy to do minimum/maximum/other
+such functions over the vector without worrying about the logical
+structure. Warning: NEVER use this after some other mapping operation
+has been performed on the pdl: very strange things will happen.
+
+=cut
+
+sub asvector {
+	my $this = shift;
+	my $new = $this->_shallowcopy();
+	my $val = 1;
+	for (@{$new->{Dims}}) {$val *= $_;}
+	$new->{Dims} = [$val];
+	$new->{Incs} = [1];
+	return $new;
 }
 
 =head2 printdims
@@ -229,11 +271,28 @@ sub _obliterate {
 	$this->{Incs} = [map {$_ eq "X" ? () : $_} @{$this->{Incs}}];
 }
 
+sub _adddummies {
+	my $this = shift;
+	my $ind = 0;
+	for(@_) {
+# To make _adddummies(2,2,2) possible
+		if( ref($this->{Dims}[$_]) ) {
+			$this->{Dims}[$_] = [1,@{$this->{Dims}[$_]}];
+			$this->{Incs}[$_] = [0,@{$this->{Incs}[$_]}];
+		} else {
+			$this->{Dims}[$_] = [1,$this->{Dims}[$_]];
+			$this->{Incs}[$_] = [0,$this->{Incs}[$_]];
+		}
+	}
+	$this->{Dims} = [map {ref $_ ? (@$_) : $_} @{$this->{Dims}}];
+	$this->{Incs} = [map {ref $_ ? (@$_) : $_} @{$this->{Incs}}];
+}
+
 # Make a shallow copy: just a reference to data
 sub _shallowcopy {
 	my $this = shift;
 	my $new = bless {}, ref($this);
-	for ( grep($_ ne "Data", keys %$this) ) {   # Efficient to ignore Data here
+	for ( grep(($_ ne "PDL" and $_ ne "Data"), keys %$this) ) {   # Efficient to ignore Data here
 		$$new{$_} = PDL::Core::rcopyitem( $$this{$_} );  # Deep copy
 	}
 	if(ref $this->{Data}) {
@@ -276,5 +335,8 @@ of using these in other ways are highly unpredictable.
 Tuomas J. Lukka (lukka@fas.harvard.edu)
 
 =cut
+
+package PDL::Thread;
+sub foo {}
 
 1;

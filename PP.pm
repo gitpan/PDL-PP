@@ -390,7 +390,7 @@ sub do_indterm { my($this,$pdl,$ind,$subst,$context) = @_;
 	else {
 # No => get the one from the nearest context.
 		for(reverse @$context) {
-			if($_->[0] eq $indname) {$index = $_->[1]; break;}
+			if($_->[0] eq $indname) {$index = $_->[1]; last;}
 		}
 	}
 	if(!defined $index) {confess "Access Index not found: $pdl, $ind, $indname
@@ -408,7 +408,10 @@ sub get_indname { my($this,$ind) = @_;
 }
 
 sub get_xsinddecls { my($this) = @_;
+	my $pdl = $this->{Name};
 	"long $this->{Name}_threadoffs;
+	 long __creating_$this->{Name} = (($pdl)->ndims == 1 &&
+	 	($pdl)->dims[0] == 0);
 	 long *__implthreadincs_$this->{Name};\n".
 	join '', map {
 		"long __inc_$this->{Name}_".$this->get_indname($_).";\n";
@@ -425,8 +428,10 @@ sub get_xsinddecls { my($this) = @_;
 # Orig. __nimplthreaddims = 0
 sub get_xsimplthread1 { my($this) = @_;
 	my $ndims = $#{$this->{Inds}}+1;
-	return "if(__nimplthreaddims < $this->{Name}.ndims - $ndims)
-		   __nimplthreaddims = $this->{Name}.ndims - $ndims;";
+	return "
+		if(! __creating_$this->{Name} &&
+		   __nimplthreaddims < $this->{Name} -> ndims - $ndims)
+		   __nimplthreaddims = $this->{Name} -> ndims - $ndims;";
 }
 
 # Then, __implthreaddims has been allocated, fill up the values with the
@@ -437,21 +442,21 @@ sub get_xsimplthread1 { my($this) = @_;
 sub get_xsimplthread2 { my($this) = @_;
   my $pdl = $this->{Name}; my $ninds = $#{$this->{Inds}}+1;
   return "
-    if(__nimplthreaddims) {
+    if(__nimplthreaddims && !__creating_$this->{Name}) {
   	__implthreadincs_$pdl = PDL->malloc(sizeof(int) * __nimplthreaddims);
 	for(__ind = 0; __ind < __nimplthreaddims; __ind++) {
 		(__implthreadincs_${pdl})[__ind] = 0;
 	}
-	for(__ind = $ninds; __ind < $pdl.ndims; __ind ++) {
-		(__implthreadincs_$pdl)[__ind - $ninds] = $pdl.incs[__ind];
-		if($pdl.dims[__ind] == 1) { continue; }
-		if(__implthreaddims[__ind - $ninds] < $pdl.dims[__ind]) {
+	for(__ind = $ninds; __ind < $pdl->ndims; __ind ++) {
+		(__implthreadincs_$pdl)[__ind - $ninds] = $pdl->incs[__ind];
+		if($pdl->dims[__ind] == 1) { continue; }
+		if(__implthreaddims[__ind - $ninds] < $pdl->dims[__ind]) {
 			if(__implthreaddims[__ind - $ninds] != 1) {
 				croak(\"$this->{PName}: Invalid dimension %d given for $pdl: incompatible with threading 1 (was %d)\\n\",__ind,
-					$pdl.dims[__ind]);
+					$pdl->dims[__ind]);
 			}
-			__implthreaddims[__ind - $ninds] = $pdl.dims[__ind];
-		} else if(__implthreaddims[__ind - $ninds] != $pdl.dims[__ind]) {
+			__implthreaddims[__ind - $ninds] = $pdl->dims[__ind];
+		} else if(__implthreaddims[__ind - $ninds] != $pdl->dims[__ind]) {
 			croak(\"Invalid dimension %d given for $pdl: incompatible with threading 2\\n\",__ind);
 		}
 	}
@@ -461,54 +466,82 @@ sub get_xsimplthread2 { my($this) = @_;
 # Check the dimensions.
 # I'll try to explain the semantics at some point.
 sub get_xsnormdimchecks { my($this) = @_;
-	my $pdl = $this->{Name};
+  my $pdl = $this->{Name}; my $ninds = $#{$this->{Inds}}+1;
+  "if(!__creating_$this->{Name}) {".
 # Sanity check to avoid strange pointer accesses
 	"__flag = 0;
-	 for(__ind = 0; __ind < $pdl.ndims; __ind++) 
-	 	__flag += ($pdl.dims[__ind]-1) * $pdl.incs[__ind];
-	 for(__ind = 0; __ind < $pdl.nthreaddims; __ind++) 
-	 	__flag += ($pdl.threaddims[__ind]-1) * $pdl.threadincs[__ind];
-	 if(__flag >= $pdl.nvals || __flag < 0) {
+	 for(__ind = 0; __ind < $pdl->ndims; __ind++) 
+	 	__flag += (($pdl)->dims[__ind]-1) * ($pdl)->incs[__ind];
+	 for(__ind = 0; __ind < $pdl->nthreaddims; __ind++) 
+	 	__flag += ($pdl->threaddims[__ind]-1) * $pdl->threadincs[__ind];
+	 if(__flag >= $pdl->nvals || __flag < 0) {
 	 	croak(\"HELP!HELP!HELP! Invalid input dims for $pdl given!\\n\");
 	 }
 	".
-	"if($this->{Name}.ndims < $#{$this->{Inds}}+1) {
+	"if(($pdl)->ndims < $#{$this->{Inds}}+1) {
 		croak(\"$this->{PName}: Too few dimensions for $this->{Name} (ndims: %d, was %d)\\n\",
-			$#{$this->{Inds}}+1, $pdl.ndims);
+			$#{$this->{Inds}}+1, $pdl->ndims);
 	 }" .
-	("for(__ind=0;__ind < $this->{Name}.ndims; __ind++) 
-		if($this->{Name}.dims[__ind] == 1) {
-			$this->{Name}.incs[__ind] = 0;
+	("for(__ind=0;__ind < ($this->{Name})->ndims; __ind++) 
+		if(($pdl)->dims[__ind] == 1) {
+			($pdl)->incs[__ind] = 0;
 		}\n"
 	).
 	(join '', map {
-		"if($this->{Inds}[$_]_size == -1) {
-			    $this->{Inds}[$_]_size = $this->{Name}.dims[$_];
-			} else if($this->{Inds}[$_]_size != $this->{Name}.dims[$_]) {
-			   if($this->{Inds}[$_]_size == 1) {
-			      $this->{Inds}[$_]_size = $this->{Name}.dims[$_];
-			   } else if($this->{Name}.dims[$_] == 1) {
-			      /* Do nothing */
+		"if(${$this->{Inds}}[$_]_size == -1) {"."
+			    $this->{Inds}[$_]_size = ($pdl)->dims[$_];"."
+			} else if($this->{Inds}[$_]_size != ($pdl)->dims[$_]) {"."
+			   if($this->{Inds}[$_]_size == 1) {"."
+			      $this->{Inds}[$_]_size = ($pdl)->dims[$_];"."
+			   } else if(($pdl)->dims[$_] == 1) {"."
+			      /* Do nothing */"."
 			   } else {
 				croak(\"$this->{PName}: Wrong dimension $this->{Inds}[$_] for $this->{Name} (should be: %d, was %d)\\n\",
-				 $this->{Inds}[$_]_size, $this->{Name}.dims[$_]);
+				 $this->{Inds}[$_]_size, ($pdl)->dims[$_]);
 			    }
-			}
-		__inc_$this->{Name}_".$this->get_indname($_)." =
-			$this->{Name}.incs[$_];\n";
+			}\n";
+	} (0..$#{$this->{Inds}}))
+  ."} else {".
+# We need to create this pdl.
+	(!$this->{FlagCreat} ? qq'croak("Cannot create non-output argument $this->{PName}:$this->{Name}!\\n");' :
+	 (
+	  "PDL->reallocdims($pdl,$ninds + __nimplthreaddims);
+  	   __implthreadincs_$pdl = PDL->malloc(sizeof(int) * __nimplthreaddims);
+	  ".(join '',map {
+		   "if($this->{Inds}[$_]_size == -1) {
+		     croak(\"$this->{PName}: $pdl - defining but index $this->{Inds}[$_] not predefined!\");
+		    }
+		    $pdl->dims[$_] = $this->{Inds}[$_]_size;
+		   ";} (0..$#{$this->{Inds}})).
+ 	  "for(__ind = 0; __ind < __nimplthreaddims; __ind ++) {
+	  	$pdl->dims[$ninds + __ind] = __implthreaddims[__ind];
+	   }
+	   PDL->resize_defaultincs($pdl);
+	   PDL->flushcache($pdl);
+	for(__ind = $ninds; __ind < $pdl->ndims; __ind ++) {
+		(__implthreadincs_$pdl)[__ind - $ninds] = $pdl->incs[__ind];
+	}
+	 ")
+	 )
+  ."}".
+  (join '',map {"__inc_$this->{Name}_".$this->get_indname($_)." =
+			($pdl)->incs[$_];\n";
 	} (0..$#{$this->{Inds}}));
 }
 
 sub get_xsthreaddimchecks { my($this) =@_;
 	my $pdl = $this->{Name};
-	"if($pdl.nthreaddims != __nthreaddims) {
-		if($pdl.nthreaddims == 0) {
+	"if(__nthreaddims > 0 && __creating_$this->{Name}) {
+		croak(\"Cannot have explicit threading and creation: $this->{PName} $this->{Name}\\n\");
+	 }
+	 if($pdl->nthreaddims != __nthreaddims) {
+		if($pdl->nthreaddims == 0) {
 			/* Do nothing. Must test for this in threadloop!!! */
 		} else if(__nthreaddims == -1) {
-			__nthreaddims = $pdl.nthreaddims;
+			__nthreaddims = $pdl->nthreaddims;
 			__threaddims = PDL->malloc(sizeof(int) * __nthreaddims);
 			for(__ind=0; __ind < __nthreaddims; __ind++) {
-				__threaddims[__ind] = $pdl.threaddims[__ind];
+				__threaddims[__ind] = $pdl->threaddims[__ind];
 			}
 			__threadinds = PDL->malloc(sizeof(int) * __nthreaddims);
 		} else {
@@ -516,10 +549,10 @@ sub get_xsthreaddimchecks { my($this) =@_;
 		}
 	 }
 	 for(__ind = 0; __ind < __nthreaddims; __ind++) {
-	 	if($pdl.threaddims[__ind] != __threaddims[__ind] &&
-		   $pdl.threaddims[__ind] != 1) {
+	 	if($pdl->threaddims[__ind] != __threaddims[__ind] &&
+		   $pdl->threaddims[__ind] != 1) {
 		   	if(__threaddims[__ind] == 1) {
-				__threaddims[__ind] = $pdl.threaddims[__ind];
+				__threaddims[__ind] = $pdl->threaddims[__ind];
 			} else 
 			  croak(\"$this->{PName}:Unequal thread dimension %d for $pdl\\n\",__ind);
 		}
@@ -530,14 +563,14 @@ sub get_xsthreadoffs { my($this) = @_;
 	my $pdl = $this->{Name};my $ninds = $#{$this->{Inds}}+1;
 	"
 	 ${pdl}_threadoffs= 0;
-	 if($pdl.nthreaddims != 0) {
+	 if($pdl->nthreaddims != 0) {
 	 	for(__ind=0; __ind < __nthreaddims; __ind++) {
 			${pdl}_threadoffs += __threadinds[__ind] *
-				${pdl}.threadincs[__ind];
+				${pdl}->threadincs[__ind];
 		}
 	 }
 	 if(__nimplthreaddims) {
-	 	for(__ind = $ninds; __ind < $pdl.ndims; __ind ++) {
+	 	for(__ind = $ninds; __ind < $pdl->ndims; __ind ++) {
 			${pdl}_threadoffs += __implthreadinds[__ind-$ninds] *
 				(__implthreadincs_$pdl)[__ind-$ninds];
 		}
@@ -552,23 +585,30 @@ sub get_xsdatapdecl { my($this,$genlooptype) = @_;
 	} else {
 		$type = "long";
 	}
-	return "\t$type *${pdl}_datap = ($type *)${_}.data + ${_}.offs;\n";
+	return "\t$type *${pdl}_datap = (($type *)((${_})->data)) + (${_})->offs;\n";
 }
 
 sub get_xsdatatypetest { my($this) = @_;
+	my $pdl = $this->{Name};
+	my $str = "printf(\"$this->{PName} arg $this->{Name}: %d %d %d\\n\",
+		$pdl,$pdl->ndims,$pdl->datatype,$pdl->nthreaddims);";
 	if(!grep {/^int$/} @{$this->{Flags}}) {
-		return ("\tif($this->{Name}.datatype > __datatype)
-			__datatype = $this->{Name}.datatype;\n");
+		return $str . ("\tif(($pdl)->datatype > __datatype)
+			__datatype = ($this->{Name})->datatype;\n");
 	} else {
 		print "Not doing $this->{Name}: has int type\n";
-		return(qq%\tif($this->{Name}.datatype != PDL_L) croak("Invalid datatype for $this->{Name}: should be long\n");%);
+		return $str . (qq%\tif(($pdl)->datatype != PDL_L) croak("Invalid datatype for $this->{Name}: should be long\n");%);
 	}
 
 }
 
 sub get_xscoerce { my($this) = @_;
+	my $pdl = $this->{Name};
 	if(!grep {/^int$/} @{$this->{Flags}}) {
-		return("\tPDL->converttype(&($this->{Name}),__datatype,1);\n");
+		return("if(($pdl)->datatype != __datatype) {
+			warn(\"PDL::PP $this->{PName} Converting $this->{Name}\\n\");
+			PDL->converttype(&($pdl),__datatype,1);
+		}\n");
 	}
 }
 
@@ -754,7 +794,7 @@ sub get_str { my($this,$parent,$context) = @_;
 package PDL::PP::PointerAccess;
 use Carp;
 
-sub new { my($type,$pdl,$inds) = @_; bless [$pdl,$inds],$type; }
+sub new { my($type,$pdl,$inds) = @_; bless [$inds],$type; }
 
 sub get_str {my($this,$parent,$context) = @_;
 	$parent->{Pdls}{$this->[0]}->do_pointeraccess();
@@ -1078,7 +1118,7 @@ sub make_loopind { my($this,$ind) = @_;
 # Make the parameter lists for the XSUB
 # XXX
 sub make_parlist { my($this) = @_;
-	$this->{ParList} = [(map {["pdl",$_]} @{$this->{PdlNames}}),
+	$this->{ParList} = [(map {["pdl*",$_]} @{$this->{PdlNames}}),
 		map {/^(\w+\**)\s+(\w+)$/ or die "Invalid parameter $_"; [$1,$2]}
 			split ',',$this->{PARS}];
 	$this->run_hooks("CALLPARAMS");
