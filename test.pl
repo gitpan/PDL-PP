@@ -1,6 +1,7 @@
 use blib;
 use PDL;
 use PDL::Experiment;
+use Data::Dumper;
 
 $a = pdl [1,2],[3,4],[5,6];
 $b = pdl [0,0,0],[0,0,0];
@@ -10,6 +11,20 @@ print $a; print $b;
 PDLTEST1($a,$b,5);
 
 print $b;
+$d = {%$b};
+print Dumper($d);
+
+print "TESTING CRETION\n";
+
+$b=pdl 0;
+print $b; 
+$d = {%$b};
+print Dumper($d);
+PDLTEST1($a,$b,5);
+
+print $b; 
+$d = {%$b};
+print Dumper($d);
 
 # Try out the matrix multiplier.
 

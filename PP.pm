@@ -362,10 +362,11 @@ sub parse_pdls { my($this) = @_;
 	}
 # And get the info out of each one.
 	for (@{$this->{PDLS}}) {
-		/(?:
-			(|\w+\b)	# $1: first option
+		/^
+		 \s*(int|)\s*	# $1: first option
+		 (?:
 			\[([^]]?)\]   	# $2: The initial [option] part
-	         )?
+	         )?\s*
 		 ([a-z0-9]+)          	# $3: The name
 		 \(([^)]+)\)  		# $4: The indices
 		/x or croak "Invalid pdl def $_\n";
@@ -495,7 +496,7 @@ sub do_loop { my($this,$loop,$context) = @_;
 				croak("Index not found for $_ ($ind)!\n");
 			}
 		}
-		$text .= "{int $_; for($_=0; $_<${ind}_size; $_++)";
+		$text .= "{long $_; for($_=0; $_<${ind}_size; $_++)";
 		$endtext .= "}";
 		push @newcontext, [$ind,$_];
 	}
@@ -598,11 +599,11 @@ sub print_xsheader { my($this) = @_;
 # This is the trickiest part of the whole thing.
 sub print_xsdiminit { my($this) = @_;
 # Initialize dims to zero
-	$this->printxs("\tint __restend; int __ind; int __flag; int __mult;\n");
+	$this->printxs("\tlong __restend; long __ind; long __creating; long __flag; long __mult;\n");
 	for (keys %{$this->{IndPdls}}) {
 		my $ind = $_;
 		if(/[A-Z0-9]+/) {
-			$this->printxs("\tint ${_}_ndims = -1; int *${_}_sizes = NULL, *${_}_inds = NULL,".
+			$this->printxs("\tlong ${_}_ndims = -1; long *${_}_sizes = NULL, *${_}_inds = NULL,".
 			  (join',',map {"*${_}_${ind}_incs = NULL, ${_}_${ind}_offs"}
 			    @{$this->{PdlNames}}
 			  )
@@ -610,7 +611,7 @@ sub print_xsdiminit { my($this) = @_;
 			next;
 		} 
 		if(!$this->{IndCheck}{$_}) {
-			$this->printxs("\tint ${_}_size = -1, ${_}_incs = -1 ;\n");
+			$this->printxs("\tlong ${_}_size = -1, ${_}_incs = -1 ;\n");
 		}
 	}
 	my $pdl;
@@ -618,12 +619,12 @@ sub print_xsdiminit { my($this) = @_;
 # Make the index increments. Here, if the same index repeats, all repetitions
 # need to have their increments.
 		my $ind;
-		$this->printxs("\tint ".(join',',
+		$this->printxs("\tlong ".(join',',
 		   map {$ind=$_; 
 		         "${pdl}_$this->{PdlInds}{$pdl}[$ind]$this->{PdlIndCounts}{$pdl}[$ind]_inc"
 		   	    }
 			    0..$#{$this->{PdlInds}{$pdl}}).";\n");
-		$this->printxs("\tint ${pdl}_ndims;\n");
+		$this->printxs("\tlong ${pdl}_ndims;\n");
 	}
 #	for (@{$this->{PdlNames}}) {
 #		$this->printxs(qq#\tif(${_}.datatype != PDL_D) {croak("NON-DOUBLE!\n");}\n#);
@@ -633,6 +634,8 @@ sub print_xsdiminit { my($this) = @_;
 	my %restdef=();
 	for(@{$this->{PdlOrder}}) {
 		my $pdl = $_;
+		my $isoutput = (grep {/^o$/} @{$this->{PdlFlags}{$pdl}});
+		$isoutput = ($isoutput?1:0);
 		$this->printxs("\t/* Checking indices of $_ */\n");
 # First, get the rest indices.
 		my $ind=0;
@@ -654,8 +657,10 @@ sub print_xsdiminit { my($this) = @_;
 				(defined($undef[0]) and $_ eq $undef[0]) ? () :
 				/[A-Z]/ ? "${_}_ndims" : "1";
 			} @{$this->{PdlInds}{$_}}).";\n");
+		$this->printxs("\t__creating=0;\n");
 		if($#undef == 0) {
 # The undefined rest index must be the last one for now :(
+# And we *HOPE* that no-one tries to do this with an output variable.
 			if($this->{PdlInds}{$_}[-1] ne $undef[0]) {
 				carp "Undef restind not last!\n";
 			}
@@ -676,16 +681,17 @@ sub print_xsdiminit { my($this) = @_;
 			);
 			$restdef{$undef[0]} = 1;
 		} else {
-			$this->printxs(
-			qq#\tif(${_}_ndims != ${_}.ndims) {croak("Dimensions unequal!\\n");}\n#);
+# Here is the first point where we start looking at whether we should
+# create the pdl.
+			$this->printxs("\tif(${_}_ndims != ${_}.ndims)".
+			 ($isoutput ? "__creating=1;\n" :
+			  qq#{croak("Dimensions unequal!\\n");}\n#));
 		}
 # Test the dimension sizes.
 # Alternatively, if this pdl is not defined, create the matrix
 # with these dimensions.
-#		my @incs = map {"\t${pdl}_ndims += $_;\n"}
-#			map {/[A-Z]/ ? "${_}_ndims" : "1"} 
-#			 @{$this->{PdlInds}{$_}};
 # Now, test whether the indices are equal.
+# It looks very compilcated but is actually pretty straightforward.
 		$this->printxs("\t__flag=0;__mult=1;${pdl}_ndims=0;\n");
 		my $a;
 		my $no=0;
@@ -694,16 +700,46 @@ sub print_xsdiminit { my($this) = @_;
 		    $no++;
 		    /[A-Z]/ ? "\tfor(__ind=0; __ind<${_}_ndims; __ind++) {
 		       ${pdl}_${_}_incs[__ind] = __mult; __mult *= ${_}_sizes[__ind];
-		       if(${pdl}.dims[${pdl}_ndims++] != ${_}_sizes[__ind]) 
-		       	{__flag++;}}\n"
+		       if(!__creating && 
+		         ${pdl}.dims[${pdl}_ndims] != ${_}_sizes[__ind]) 
+		       	{__flag++; __creating++;
+			 if(!$isoutput) croak(\"Dimensions not match ${pdl} $_ \");} 
+			 ${pdl}_ndims++;}\n"
 		       :"
 		        if(${_}_size == -1) {${_}_size = ${pdl}.dims[${pdl}_ndims];}
 		        ${pdl}_${_}$this->{PdlIndCounts}{$pdl}[$no-1]_inc 
 				= __mult; __mult *= ${_}_size;
-		        if(${pdl}.dims[${pdl}_ndims++] != ${_}_size) {__flag++;}\n"}
+		        if(!__creating && 
+			 ${pdl}.dims[${pdl}_ndims] != ${_}_size) 
+			   {__flag++; __creating++;
+			    if(!$isoutput) croak(\"Dimensions no match ${pdl} $_\");}
+			${pdl}_ndims++;\n"}
 		    @{$this->{PdlInds}{$_}});
-		$this->printxs(qq#\tif(__flag) {croak("Some dimensions not equal!\\n");}\n#);
-
+#		$this->printxs(qq#\tif(__flag) {croak("Some dimensions not equal!\\n");}\n#);
+# Then, if necessary, go and create it.
+		if($isoutput) {
+		$this->printxs("if(__creating) {\n");
+# First, allocate the new dims.
+		$this->printxs("${pdl}.dims = PDL->malloc(${pdl}_ndims * sizeof(int));\n");
+		$this->printxs("${pdl}.ndims = ${pdl}_ndims; ${pdl}_ndims=0;\n");
+#		$this->printxs(qq#printf("Recreating ${pdl}: %d\n",${pdl}.ndims);#);
+# Then, fill them up.
+		my $no=0;
+		$this->printxs(join '',
+		  map {
+		    $no++;
+		    if( /[A-Z]/ ) {"\tfor(__ind=0; __ind<${_}_ndims; __ind++) {
+		         ${pdl}.dims[${pdl}_ndims++] = ${_}_sizes[__ind];}"}
+		    else {
+#			qq#printf("Recreating ${pdl}: %d %d\n",
+#			 ${pdl}_ndims, ${_}_size);\n#.
+			 "${pdl}.dims[${pdl}_ndims++] = ${_}_size;\n"}}
+		    @{$this->{PdlInds}{$_}});
+# Grow the pdl.
+		$this->printxs("\tPDL->grow(&(${pdl}), __mult);\n");
+		$this->printxs("\tPDL->unpackdims((SV*)${pdl}.sv, ${pdl}.dims, ${pdl}.ndims);\n");
+		$this->printxs("}\n");
+		}
 	}
 }
 
@@ -752,7 +788,7 @@ sub print_xsfooter { my($this) = @_;
 # Type coercion
 
 sub print_xscoerce { my($this) = @_;
-	$this->printxs("\tint __datatype=PDL_B;\n");
+	$this->printxs("\tlong __datatype=PDL_B;\n");
 # First, go through all the types, selecting the most general.
 	for(@{$this->{PdlNames}}) {
 		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
@@ -794,7 +830,7 @@ sub print_xsgenericitem { my($this,$item) = @_;
 		if(!grep {/^int$/} @{$this->{PdlFlags}{$_}}) {
 			$this->printxs("\t$item->[1] *${_}_datap = ($item->[1] *)${_}.data;\n");
 		} else {
-			$this->printxs("\tint *${_}_datap = (int *)${_}.data;\n");
+			$this->printxs("\tlong *${_}_datap = (long *)${_}.data;\n");
 		}
 	}
 }
